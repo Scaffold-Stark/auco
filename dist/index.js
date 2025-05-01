@@ -325,7 +325,6 @@ class StarknetIndexer {
     }
     // Process events
     async processEvents(data) {
-        console.log('Processing events with data:', JSON.stringify(data, null, 2));
         const event = data;
         const blockNumber = event.block_number;
         if (!blockNumber) {
@@ -335,18 +334,13 @@ class StarknetIndexer {
         // Get handlers for this address
         const normalizedAddress = (0, starknet_1.validateAndParseAddress)(event.from_address).toLowerCase();
         const addressHandlerKey = `${normalizedAddress}:${event.keys[0]}`;
-        console.log(`Checking for handlers with address: ${addressHandlerKey}`);
-        console.log('Available handler keys:', Array.from(this.eventHandlers.keys()));
         const handlers = this.eventHandlers.get(addressHandlerKey) || [];
-        console.log("Handlers:", handlers);
-        console.log("Event:", addressHandlerKey);
-        console.log(`Found ${handlers.length} handlers for event from ${event.from_address}`);
         if (handlers.length > 0) {
-            console.log('Enqueueing event for processing');
+            console.log(`Found ${handlers.length} handlers for event from ${event.from_address}, enqueueing`);
             this.enqueueEvent(event, handlers);
         }
         else {
-            console.log('No handlers found for event, skipping');
+            console.log(`No handlers found for event from ${event.from_address}, skipping`);
         }
     }
     // Handle chain reorgs
@@ -422,7 +416,6 @@ class StarknetIndexer {
     }
     async processEventQueue() {
         if (this.isProcessingQueue || this.eventQueue.length === 0) {
-            console.log(`Queue processing status: isProcessing=${this.isProcessingQueue}, queueLength=${this.eventQueue.length}`);
             return;
         }
         this.isProcessingQueue = true;
@@ -430,22 +423,15 @@ class StarknetIndexer {
         try {
             const eventsToProcess = [...this.eventQueue];
             this.eventQueue = []; // Clear the queue before processing
-            console.log(`Starting to process ${eventsToProcess.length} events from queue at ${new Date().toISOString()}`);
+            console.log(`Processing ${eventsToProcess.length} events from queue`);
             while (eventsToProcess.length > 0) {
                 const batch = eventsToProcess.splice(0, this.maxConcurrentEvents);
-                console.log(`Processing batch of ${batch.length} events at ${new Date().toISOString()}`);
-                // Add a delay between batches
-                await new Promise(resolve => setTimeout(resolve, 2000)); // 2 second delay
                 await client.query('BEGIN');
                 try {
                     for (const { event, handlers } of batch) {
-                        console.log(`Checking block ${event.block_number} for event at ${new Date().toISOString()}`);
-                        // Add a delay between events
-                        await new Promise(resolve => setTimeout(resolve, 1000)); // 1 second delay
                         // First, ensure the block exists
                         const blockResult = await client.query('SELECT 1 FROM blocks WHERE number = $1', [event.block_number]);
                         if (blockResult.rows.length === 0) {
-                            console.log(`Block ${event.block_number} not found at ${new Date().toISOString()}, requeuing event`);
                             // Block doesn't exist yet, put the event back in the queue
                             this.eventQueue.push({
                                 event,
@@ -454,32 +440,22 @@ class StarknetIndexer {
                             });
                             continue;
                         }
-                        console.log(`Processing event for block ${event.block_number} at ${new Date().toISOString()}`);
-                        console.log('Event details:', {
-                            block_number: event.block_number,
-                            keys: event.keys,
-                            data: event.data,
-                            from_address: event.from_address
-                        });
                         // Process all handlers for the event
                         for (const handler of handlers) {
                             try {
-                                console.log(`Executing handler for event at ${new Date().toISOString()}`);
                                 await handler(event, client);
-                                console.log(`Handler completed successfully at ${new Date().toISOString()}`);
                             }
                             catch (error) {
-                                console.error(`Error processing event handler at ${new Date().toISOString()}:`, error);
+                                console.error(`Error processing event handler:`, error);
                                 // Continue with other handlers even if one fails
                             }
                         }
                     }
                     await client.query('COMMIT');
-                    console.log(`Successfully processed batch at ${new Date().toISOString()}`);
                 }
                 catch (error) {
                     await client.query('ROLLBACK');
-                    console.error(`Error processing event batch at ${new Date().toISOString()}:`, error);
+                    console.error(`Error processing event batch:`, error);
                     // Put the failed batch back in the queue
                     this.eventQueue.push(...batch);
                 }
@@ -490,19 +466,12 @@ class StarknetIndexer {
             this.isProcessingQueue = false;
             // If there are still events in the queue, schedule next processing
             if (this.eventQueue.length > 0) {
-                console.log(`${this.eventQueue.length} events still in queue at ${new Date().toISOString()}, scheduling next processing`);
-                setTimeout(() => this.processEventQueue(), 5000); // Wait 5 seconds before retrying
+                console.log(`${this.eventQueue.length} events still in queue, scheduling next processing`);
+                setTimeout(() => this.processEventQueue(), 1000); // Wait 1 second before retrying
             }
         }
     }
     enqueueEvent(event, handlers) {
-        console.log(`Enqueueing new event for block ${event.block_number} at ${new Date().toISOString()}`);
-        console.log('Event details:', {
-            block_number: event.block_number,
-            keys: event.keys,
-            data: event.data,
-            from_address: event.from_address
-        });
         this.eventQueue.push({
             event,
             handlers,
@@ -510,7 +479,6 @@ class StarknetIndexer {
         });
         // Start processing if not already processing
         if (!this.isProcessingQueue) {
-            console.log('Starting event queue processing');
             setImmediate(() => this.processEventQueue());
         }
     }
