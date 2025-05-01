@@ -3,21 +3,28 @@ Object.defineProperty(exports, "__esModule", { value: true });
 exports.StarknetIndexer = void 0;
 const starknet_1 = require("starknet");
 const pg_1 = require("pg");
-// Main indexer class
 class StarknetIndexer {
     constructor(config) {
         this.config = config;
         this.eventHandlers = new Map();
         this.started = false;
-        // Create PostgreSQL connection pool
+        this.eventQueue = [];
+        this.isProcessingQueue = false;
         this.pool = new pg_1.Pool({
             connectionString: config.databaseUrl
         });
-        // Create WebSocket channel
         this.wsChannel = new starknet_1.WebSocketChannel({
-            nodeUrl: config.nodeUrl
+            nodeUrl: config.wsNodeUrl
         });
-        // Setup event handlers
+        this.maxConcurrentEvents = config.maxConcurrentEvents || 5;
+        if (config.rpcNodeUrl) {
+            try {
+                this.provider = new starknet_1.RpcProvider({ nodeUrl: config.rpcNodeUrl, specVersion: '0.8' });
+            }
+            catch (error) {
+                console.warn('Failed to initialize RPC provider:', error);
+            }
+        }
         this.setupEventHandlers();
     }
     setupEventHandlers() {
@@ -35,7 +42,15 @@ class StarknetIndexer {
         this.wsChannel.onEvents = async (data) => {
             console.log('Events received:', data);
             try {
-                await this.processEvents(data.result);
+                // Process each event in the data array
+                if (Array.isArray(data.result)) {
+                    for (const event of data.result) {
+                        await this.processEvents(event);
+                    }
+                }
+                else {
+                    await this.processEvents(data.result);
+                }
             }
             catch (error) {
                 console.error('Error processing events:', error);
@@ -56,11 +71,19 @@ class StarknetIndexer {
             // Reconnection is handled automatically by the library
         };
         // Handle connection closure
-        this.wsChannel.onClose = (event) => {
+        this.wsChannel.onClose = async (event) => {
             console.log('WebSocket connection closed:', event);
             if (this.started) {
                 console.log('Attempting to reconnect...');
-                this.wsChannel.reconnect();
+                try {
+                    await this.wsChannel.reconnect();
+                    // After reconnection, resubscribe to events
+                    await this.subscribeToEvents();
+                    console.log('Successfully reconnected and resubscribed to events');
+                }
+                catch (error) {
+                    console.error('Failed to reconnect:', error);
+                }
             }
         };
     }
@@ -133,31 +156,85 @@ class StarknetIndexer {
         else {
             handler = arg1;
         }
-        const key = eventKey ? `${fromAddress}:${eventKey}` : fromAddress;
+        // Normalize address to lowercase
+        const normalizedAddress = (0, starknet_1.validateAndParseAddress)(fromAddress).toLowerCase();
+        const key = eventKey ? `${normalizedAddress}:${eventKey}` : normalizedAddress;
+        console.log(`Registering handler for key: ${key}`);
         if (!this.eventHandlers.has(key)) {
             this.eventHandlers.set(key, []);
         }
         this.eventHandlers.get(key)?.push(handler);
+        // Log all registered handlers
+        console.log('Current registered handlers:', Array.from(this.eventHandlers.entries()).map(([k, h]) => ({
+            key: k,
+            handlerCount: h.length
+        })));
     }
     // Start the indexer
     async start() {
-        console.log('Starting Starknet WebSocket indexer...');
-        // Initialize database
-        const startingBlock = await this.initializeDatabase();
-        // Wait for connection to establish
-        await this.wsChannel.waitForConnection();
-        console.log('Connected to Starknet WebSocket');
-        // Subscribe to new block heads
+        const startingBlock = await this.initializeDatabase() || 0;
+        // Get current block number if RPC is available
+        const currentBlock = this.provider ? await this.provider.getBlockNumber() : 0;
+        const targetBlock = this.config.startingBlockNumber || 0;
+        // Connect to WebSocket first
         try {
-            const newHeadsSubId = await this.wsChannel.subscribeNewHeads();
-            console.log('Subscribed to new heads with ID:', newHeadsSubId);
-            // Subscribe to events based on registered handlers
+            await this.wsChannel.waitForConnection();
+            console.log('WebSocket connection established');
+        }
+        catch (error) {
+            console.error('Failed to establish WebSocket connection:', error);
+            throw error;
+        }
+        // Subscribe to events before fetching historical data
+        try {
             await this.subscribeToEvents();
+            console.log('Successfully subscribed to events');
+        }
+        catch (error) {
+            console.error('Failed to subscribe to events:', error);
+            throw error;
+        }
+        // Fetch historical events if needed
+        const shouldFetchHistorical = targetBlock < currentBlock &&
+            (this.config.fetchHistoricalEvents !== false) &&
+            this.provider;
+        if (shouldFetchHistorical && this.provider) {
+            console.log(`Fetching historical events from block ${targetBlock} to ${currentBlock}...`);
+            try {
+                // First fetch and insert all blocks
+                console.log('Fetching historical blocks...');
+                for (let blockNumber = targetBlock; blockNumber <= currentBlock; blockNumber++) {
+                    try {
+                        const block = await this.provider.getBlock(blockNumber);
+                        if (block) {
+                            await this.processNewHead({
+                                block_number: blockNumber,
+                                block_hash: block.block_hash,
+                                parent_hash: block.parent_hash,
+                                timestamp: block.timestamp
+                            });
+                        }
+                    }
+                    catch (error) {
+                        console.error(`Error fetching block ${blockNumber}:`, error);
+                    }
+                }
+                console.log('Historical blocks fetched and inserted');
+                // Then fetch and process historical events
+                await this.fetchHistoricalEvents(targetBlock, currentBlock);
+                console.log('Historical events fetched successfully');
+            }
+            catch (error) {
+                console.warn('Failed to fetch historical events:', error);
+            }
+        }
+        try {
+            await this.wsChannel.subscribeNewHeads();
             this.started = true;
             console.log('Indexer started successfully');
         }
         catch (error) {
-            console.error('Error subscribing to events:', error);
+            console.error('Failed to subscribe to new heads:', error);
             throw error;
         }
     }
@@ -204,18 +281,26 @@ class StarknetIndexer {
                 // Try to parse it if it's a string
                 timestamp = new Date(blockData.timestamp).getTime();
             }
-            // Insert the block
-            await client.query(`
-        INSERT INTO blocks (number, hash, parent_hash, timestamp)
-        VALUES ($1, $2, $3, $4)
-        ON CONFLICT (number) DO UPDATE
-        SET hash = $2, parent_hash = $3, timestamp = $4, is_canonical = TRUE
-      `, [
-                blockData.block_number,
-                blockData.block_hash,
-                blockData.parent_hash,
-                timestamp
-            ]);
+            // Check if block already exists
+            const existingBlock = await client.query('SELECT 1 FROM blocks WHERE number = $1', [blockData.block_number]);
+            if (existingBlock.rows.length === 0) {
+                console.log(`Inserting new block #${blockData.block_number}`);
+                // Insert the block
+                await client.query(`
+          INSERT INTO blocks (number, hash, parent_hash, timestamp)
+          VALUES ($1, $2, $3, $4)
+          ON CONFLICT (number) DO UPDATE
+          SET hash = $2, parent_hash = $3, timestamp = $4, is_canonical = TRUE
+        `, [
+                    blockData.block_number,
+                    blockData.block_hash,
+                    blockData.parent_hash,
+                    timestamp
+                ]);
+            }
+            else {
+                console.log(`Block #${blockData.block_number} already exists`);
+            }
             // Update indexer state
             await client.query(`
         UPDATE indexer_state 
@@ -223,6 +308,12 @@ class StarknetIndexer {
         WHERE id = 1
       `, [blockData.block_number, blockData.block_hash]);
             await client.query('COMMIT');
+            console.log(`Successfully processed block #${blockData.block_number}`);
+            // After block is added, schedule queue processing
+            if (this.eventQueue.length > 0) {
+                console.log(`Block ${blockData.block_number} added, scheduling processing of ${this.eventQueue.length} queued events`);
+                setImmediate(() => this.processEventQueue());
+            }
         }
         catch (error) {
             await client.query('ROLLBACK');
@@ -234,68 +325,28 @@ class StarknetIndexer {
     }
     // Process events
     async processEvents(data) {
-        const events = data.events || [];
-        const blockNumber = data.block_number;
-        console.log(`Processing ${events.length} events from block #${blockNumber}`);
-        const client = await this.pool.connect();
-        try {
-            await client.query('BEGIN');
-            for (const event of events) {
-                // Insert the event
-                const eventResult = await client.query(`
-          INSERT INTO events (
-            block_number, 
-            transaction_hash, 
-            from_address, 
-            event_index, 
-            keys, 
-            data
-          ) VALUES ($1, $2, $3, $4, $5, $6)
-          RETURNING id
-        `, [
-                    blockNumber,
-                    event.transaction_hash,
-                    event.from_address,
-                    event.event_index || 0,
-                    event.keys || [],
-                    event.data || []
-                ]);
-                // Call appropriate event handlers
-                // First try handlers for specific address:key combinations
-                for (const key of event.keys || []) {
-                    const specificHandlerKey = `${event.from_address}:${key}`;
-                    const specificHandlers = this.eventHandlers.get(specificHandlerKey) || [];
-                    for (const handler of specificHandlers) {
-                        try {
-                            await handler(event, client);
-                        }
-                        catch (error) {
-                            console.error(`Error in event handler for ${specificHandlerKey}:`, error);
-                            // Continue processing other handlers
-                        }
-                    }
-                }
-                // Then try handlers for all events from this address
-                const addressHandlerKey = event.from_address;
-                const addressHandlers = this.eventHandlers.get(addressHandlerKey) || [];
-                for (const handler of addressHandlers) {
-                    try {
-                        await handler(event, client);
-                    }
-                    catch (error) {
-                        console.error(`Error in address-wide event handler for ${addressHandlerKey}:`, error);
-                        // Continue processing other handlers
-                    }
-                }
-            }
-            await client.query('COMMIT');
+        console.log('Processing events with data:', JSON.stringify(data, null, 2));
+        const event = data;
+        const blockNumber = event.block_number;
+        if (!blockNumber) {
+            console.error('Invalid event data structure:', event);
+            return;
         }
-        catch (error) {
-            await client.query('ROLLBACK');
-            console.error('Failed to process events:', error);
+        // Get handlers for this address
+        const normalizedAddress = (0, starknet_1.validateAndParseAddress)(event.from_address).toLowerCase();
+        const addressHandlerKey = `${normalizedAddress}:${event.keys[0]}`;
+        console.log(`Checking for handlers with address: ${addressHandlerKey}`);
+        console.log('Available handler keys:', Array.from(this.eventHandlers.keys()));
+        const handlers = this.eventHandlers.get(addressHandlerKey) || [];
+        console.log("Handlers:", handlers);
+        console.log("Event:", addressHandlerKey);
+        console.log(`Found ${handlers.length} handlers for event from ${event.from_address}`);
+        if (handlers.length > 0) {
+            console.log('Enqueueing event for processing');
+            this.enqueueEvent(event, handlers);
         }
-        finally {
-            client.release();
+        else {
+            console.log('No handlers found for event, skipping');
         }
     }
     // Handle chain reorgs
@@ -346,6 +397,7 @@ class StarknetIndexer {
                 }
                 catch (error) {
                     console.error(`Error unsubscribing from ${type}:`, error);
+                    // Continue with other unsubscriptions even if one fails
                 }
             }
         }
@@ -367,6 +419,123 @@ class StarknetIndexer {
             console.error('Error closing database pool:', error);
         }
         console.log('Indexer stopped');
+    }
+    async processEventQueue() {
+        if (this.isProcessingQueue || this.eventQueue.length === 0) {
+            console.log(`Queue processing status: isProcessing=${this.isProcessingQueue}, queueLength=${this.eventQueue.length}`);
+            return;
+        }
+        this.isProcessingQueue = true;
+        const client = await this.pool.connect();
+        try {
+            const eventsToProcess = [...this.eventQueue];
+            this.eventQueue = []; // Clear the queue before processing
+            console.log(`Starting to process ${eventsToProcess.length} events from queue at ${new Date().toISOString()}`);
+            while (eventsToProcess.length > 0) {
+                const batch = eventsToProcess.splice(0, this.maxConcurrentEvents);
+                console.log(`Processing batch of ${batch.length} events at ${new Date().toISOString()}`);
+                // Add a delay between batches
+                await new Promise(resolve => setTimeout(resolve, 2000)); // 2 second delay
+                await client.query('BEGIN');
+                try {
+                    for (const { event, handlers } of batch) {
+                        console.log(`Checking block ${event.block_number} for event at ${new Date().toISOString()}`);
+                        // Add a delay between events
+                        await new Promise(resolve => setTimeout(resolve, 1000)); // 1 second delay
+                        // First, ensure the block exists
+                        const blockResult = await client.query('SELECT 1 FROM blocks WHERE number = $1', [event.block_number]);
+                        if (blockResult.rows.length === 0) {
+                            console.log(`Block ${event.block_number} not found at ${new Date().toISOString()}, requeuing event`);
+                            // Block doesn't exist yet, put the event back in the queue
+                            this.eventQueue.push({
+                                event,
+                                handlers,
+                                timestamp: Date.now()
+                            });
+                            continue;
+                        }
+                        console.log(`Processing event for block ${event.block_number} at ${new Date().toISOString()}`);
+                        console.log('Event details:', {
+                            block_number: event.block_number,
+                            keys: event.keys,
+                            data: event.data,
+                            from_address: event.from_address
+                        });
+                        // Process all handlers for the event
+                        for (const handler of handlers) {
+                            try {
+                                console.log(`Executing handler for event at ${new Date().toISOString()}`);
+                                await handler(event, client);
+                                console.log(`Handler completed successfully at ${new Date().toISOString()}`);
+                            }
+                            catch (error) {
+                                console.error(`Error processing event handler at ${new Date().toISOString()}:`, error);
+                                // Continue with other handlers even if one fails
+                            }
+                        }
+                    }
+                    await client.query('COMMIT');
+                    console.log(`Successfully processed batch at ${new Date().toISOString()}`);
+                }
+                catch (error) {
+                    await client.query('ROLLBACK');
+                    console.error(`Error processing event batch at ${new Date().toISOString()}:`, error);
+                    // Put the failed batch back in the queue
+                    this.eventQueue.push(...batch);
+                }
+            }
+        }
+        finally {
+            client.release();
+            this.isProcessingQueue = false;
+            // If there are still events in the queue, schedule next processing
+            if (this.eventQueue.length > 0) {
+                console.log(`${this.eventQueue.length} events still in queue at ${new Date().toISOString()}, scheduling next processing`);
+                setTimeout(() => this.processEventQueue(), 5000); // Wait 5 seconds before retrying
+            }
+        }
+    }
+    enqueueEvent(event, handlers) {
+        console.log(`Enqueueing new event for block ${event.block_number} at ${new Date().toISOString()}`);
+        console.log('Event details:', {
+            block_number: event.block_number,
+            keys: event.keys,
+            data: event.data,
+            from_address: event.from_address
+        });
+        this.eventQueue.push({
+            event,
+            handlers,
+            timestamp: Date.now()
+        });
+        // Start processing if not already processing
+        if (!this.isProcessingQueue) {
+            console.log('Starting event queue processing');
+            setImmediate(() => this.processEventQueue());
+        }
+    }
+    async fetchHistoricalEvents(fromBlock, toBlock) {
+        if (!this.provider)
+            return;
+        console.log(`Starting historical event fetch from block ${fromBlock} to ${toBlock}`);
+        for (const [address, handlers] of this.eventHandlers.entries()) {
+            const [contractAddress, eventKey] = address.includes(':') ? address.split(':') : [address, undefined];
+            const keyFilter = eventKey ? [[eventKey]] : undefined;
+            console.log(`Fetching events for contract ${contractAddress}${eventKey ? ` with key ${eventKey}` : ''}`);
+            const response = await this.provider.getEvents({
+                address: contractAddress,
+                from_block: { block_number: fromBlock },
+                to_block: { block_number: toBlock },
+                keys: keyFilter,
+                chunk_size: 1000
+            });
+            if (response.events) {
+                console.log(`Found ${response.events.length} events for contract ${contractAddress}`);
+                for (const event of response.events) {
+                    this.enqueueEvent(event, handlers);
+                }
+            }
+        }
     }
 }
 exports.StarknetIndexer = StarknetIndexer;
