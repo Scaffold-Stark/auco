@@ -1,10 +1,5 @@
-import { PoolClient } from 'pg';
-export interface IndexerConfig {
-    nodeUrl: string;
-    databaseUrl: string;
-    startingBlockNumber?: number;
-}
-export type EventHandler = (event: any, client: PoolClient) => Promise<void>;
+import { IndexerConfig, EventHandler } from './types';
+export { IndexerConfig, EventHandler };
 export declare class StarknetIndexer {
     private config;
     private wsChannel;
@@ -14,6 +9,7 @@ export declare class StarknetIndexer {
     constructor(config: IndexerConfig);
     private setupEventHandlers;
     initializeDatabase(): Promise<number | undefined>;
+    onEvent(fromAddress: string, handler: EventHandler): void;
     onEvent(fromAddress: string, eventKey: string, handler: EventHandler): void;
     start(): Promise<void>;
     private subscribeToEvents;

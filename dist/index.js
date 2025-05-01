@@ -123,9 +123,17 @@ class StarknetIndexer {
             client.release();
         }
     }
-    // Register an event handler for a specific contract address and event key
-    onEvent(fromAddress, eventKey, handler) {
-        const key = `${fromAddress}:${eventKey}`;
+    onEvent(fromAddress, arg1, arg2) {
+        let eventKey;
+        let handler;
+        if (typeof arg2 === 'function') {
+            eventKey = arg1;
+            handler = arg2;
+        }
+        else {
+            handler = arg1;
+        }
+        const key = eventKey ? `${fromAddress}:${eventKey}` : fromAddress;
         if (!this.eventHandlers.has(key)) {
             this.eventHandlers.set(key, []);
         }
@@ -155,22 +163,25 @@ class StarknetIndexer {
     }
     // Subscribe to events based on registered handlers
     async subscribeToEvents() {
-        // Group by from_address for efficiency
-        const addressMap = new Map();
+        // Track addresses we've already subscribed to
+        const subscribedAddresses = new Set();
         for (const key of this.eventHandlers.keys()) {
-            const [address, eventKey] = key.split(':');
-            if (!addressMap.has(address)) {
-                addressMap.set(address, []);
-            }
-            addressMap.get(address)?.push(eventKey);
-        }
-        // Subscribe for each address
-        for (const [address, eventKeys] of addressMap.entries()) {
-            const keys = eventKeys.map(key => [key]);
+            const [address, eventKey] = key.includes(':') ? key.split(':') : [key, undefined];
+            // Skip if we've already subscribed to all events for this address
+            if (subscribedAddresses.has(address))
+                continue;
             try {
-                // Use subscribeEventsUnmanaged for multiple subscriptions
-                const subId = await this.wsChannel.subscribeEventsUnmanaged(address, keys);
-                console.log(`Subscribed to events from ${address} with ID:`, subId);
+                if (eventKey) {
+                    // Subscribe to specific event key
+                    const subId = await this.wsChannel.subscribeEventsUnmanaged(address, [[eventKey]]);
+                    console.log(`Subscribed to events from ${address} with key ${eventKey}, ID:`, subId);
+                }
+                else {
+                    // Subscribe to all events from this address
+                    const subId = await this.wsChannel.subscribeEventsUnmanaged(address);
+                    console.log(`Subscribed to all events from ${address} with ID:`, subId);
+                    subscribedAddresses.add(address);
+                }
             }
             catch (error) {
                 console.error(`Error subscribing to events for address ${address}:`, error);
@@ -250,17 +261,30 @@ class StarknetIndexer {
                     event.data || []
                 ]);
                 // Call appropriate event handlers
+                // First try handlers for specific address:key combinations
                 for (const key of event.keys || []) {
-                    const handlerKey = `${event.from_address}:${key}`;
-                    const handlers = this.eventHandlers.get(handlerKey) || [];
-                    for (const handler of handlers) {
+                    const specificHandlerKey = `${event.from_address}:${key}`;
+                    const specificHandlers = this.eventHandlers.get(specificHandlerKey) || [];
+                    for (const handler of specificHandlers) {
                         try {
                             await handler(event, client);
                         }
                         catch (error) {
-                            console.error(`Error in event handler for ${handlerKey}:`, error);
+                            console.error(`Error in event handler for ${specificHandlerKey}:`, error);
                             // Continue processing other handlers
                         }
+                    }
+                }
+                // Then try handlers for all events from this address
+                const addressHandlerKey = event.from_address;
+                const addressHandlers = this.eventHandlers.get(addressHandlerKey) || [];
+                for (const handler of addressHandlers) {
+                    try {
+                        await handler(event, client);
+                    }
+                    catch (error) {
+                        console.error(`Error in address-wide event handler for ${addressHandlerKey}:`, error);
+                        // Continue processing other handlers
                     }
                 }
             }
