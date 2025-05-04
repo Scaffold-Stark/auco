@@ -1,13 +1,62 @@
 import { WebSocketChannel, RpcProvider, validateAndParseAddress, CallData, events, Abi, hash } from 'starknet';
 import { Pool, PoolClient } from 'pg';
 
+export enum LogLevel {
+  DEBUG = 'debug',
+  INFO = 'info',
+  WARN = 'warn',
+  ERROR = 'error'
+}
+
+export interface Logger {
+  debug(message: string, ...args: any[]): void;
+  info(message: string, ...args: any[]): void;
+  warn(message: string, ...args: any[]): void;
+  error(message: string, ...args: any[]): void;
+}
+
+export class ConsoleLogger implements Logger {
+  constructor(private level: LogLevel = LogLevel.INFO) {}
+
+  private shouldLog(level: LogLevel): boolean {
+    const levels = Object.values(LogLevel);
+    return levels.indexOf(level) >= levels.indexOf(this.level);
+  }
+
+  debug(message: string, ...args: any[]): void {
+    if (this.shouldLog(LogLevel.DEBUG)) {
+      console.debug(`[DEBUG] ${message}`, ...args);
+    }
+  }
+
+  info(message: string, ...args: any[]): void {
+    if (this.shouldLog(LogLevel.INFO)) {
+      console.info(`[INFO] ${message}`, ...args);
+    }
+  }
+
+  warn(message: string, ...args: any[]): void {
+    if (this.shouldLog(LogLevel.WARN)) {
+      console.warn(`[WARN] ${message}`, ...args);
+    }
+  }
+
+  error(message: string, ...args: any[]): void {
+    if (this.shouldLog(LogLevel.ERROR)) {
+      console.error(`[ERROR] ${message}`, ...args);
+    }
+  }
+}
+
 export interface IndexerConfig {
   wsNodeUrl: string;
   rpcNodeUrl?: string | undefined;
   databaseUrl: string;
   startingBlockNumber?: number;
   contractAddresses?: string[];
-  cursorKey?: string; // Identifier for this indexer's cursor
+  cursorKey?: string;
+  logLevel?: LogLevel;
+  logger?: Logger;
 }
 
 export type EventHandler = (event: any, client: PoolClient, indexer: StarknetIndexer) => Promise<void>;
@@ -45,8 +94,11 @@ export class StarknetIndexer {
   private contractAddresses: Set<string> = new Set();
   private abiMapping: Map<string, any> = new Map();
   private cursor: Cursor | null = null;
+  private logger: Logger;
   
   constructor(private config: IndexerConfig) {
+    this.logger = config.logger || new ConsoleLogger(config.logLevel);
+    
     this.pool = new Pool({
       connectionString: config.databaseUrl
     });
@@ -57,8 +109,7 @@ export class StarknetIndexer {
 
     if (config.contractAddresses) {
       config.contractAddresses.forEach(address => {
-        const normalizedAddress = validateAndParseAddress(address).toLowerCase();
-        this.contractAddresses.add(normalizedAddress);
+        this.contractAddresses.add(this.normalizeAddress(address));
       });
     }
 
@@ -66,7 +117,7 @@ export class StarknetIndexer {
       try {
         this.provider = new RpcProvider({ nodeUrl: config.rpcNodeUrl, specVersion: '0.8' });
       } catch (error) {
-        console.error('Failed to initialize RPC provider:', error);
+        this.logger.error('Failed to initialize RPC provider:', error);
       }
     }
     
@@ -75,7 +126,7 @@ export class StarknetIndexer {
   
   private setupEventHandlers() {
     this.wsChannel.onNewHeads = async (data) => {
-      try {
+      await this.withErrorHandling('Processing new head', async () => {
         const blockData = {
           block_number: data.result.block_number,
           block_hash: data.result.block_hash,
@@ -84,44 +135,39 @@ export class StarknetIndexer {
         };
         
         if (this.isProcessingBlocks) {
-          console.log(`[Block] Queuing block #${blockData.block_number} for later processing`);
+          this.logger.info(`Queuing block #${blockData.block_number} for later processing`);
           this.blockQueue.push(blockData);
         } else {
           if (!this.cursor || blockData.block_number > this.cursor.blockNumber) {
-            console.log(`[Block] Processing new block #${blockData.block_number}`);
+            this.logger.info(`Processing new block #${blockData.block_number}`);
             await this.processNewHead(blockData);
           } else {
-            console.log(`[Block] Skipping block #${blockData.block_number} - already processed`);
+            this.logger.debug(`Skipping block #${blockData.block_number} - already processed`);
           }
         }
-      } catch (error) {
-        console.error('[Block] Error processing new head:', error);
-      }
+      }, { blockNumber: data.result.block_number });
     };
     
     this.wsChannel.onReorg = async (data) => {
       const reorgPoint = data.result?.starting_block_number;
-      
       if (reorgPoint) {
-        console.log(`[Reorg] Handling reorg from block #${reorgPoint}`);
+        this.logger.info(`Handling reorg from block #${reorgPoint}`);
         await this.handleReorg(reorgPoint);
       }
     };
     
     this.wsChannel.onError = (error) => {
-      console.error('[WebSocket] Error:', error);
+      this.logger.error('WebSocket error:', error);
     };
     
     this.wsChannel.onClose = async (event) => {
       if (this.started) {
-        console.log('[WebSocket] Connection closed, attempting to reconnect...');
-        try {
+        this.logger.info('Connection closed, attempting to reconnect...');
+        await this.withErrorHandling('Reconnecting WebSocket', async () => {
           await this.wsChannel.reconnect();
           await this.wsChannel.subscribeNewHeads();
-          console.log('[WebSocket] Successfully reconnected');
-        } catch (error) {
-          console.error('[WebSocket] Failed to reconnect:', error);
-        }
+          this.logger.info('Successfully reconnected');
+        });
       }
     };
   }
@@ -139,7 +185,7 @@ export class StarknetIndexer {
   private async validateEventName(contractAddress: string, eventName: string): Promise<boolean> {
     const abi = await this.getContractABI(contractAddress);
     if (!abi) {
-      console.error(`[ABI] No ABI found for contract ${contractAddress}`);
+      this.logger.error(`No ABI found for contract ${contractAddress}`);
       return false;
     }
 
@@ -150,22 +196,46 @@ export class StarknetIndexer {
       const cleanEventName = fullName.split('::').pop() || '';
       
       if (cleanEventName.toLowerCase() === eventName.toLowerCase()) {
-        console.log(`[Event] Found event "${eventName}" in contract ${contractAddress}`);
+        this.logger.info(`Found event "${eventName}" in contract ${contractAddress}`);
         return true;
       }
       
       if (item.kind === 'enum' && Array.isArray(item.variants)) {
         for (const variant of item.variants) {
           if (variant.name?.toLowerCase() === eventName.toLowerCase()) {
-            console.log(`[Event] Found enum variant "${eventName}" in contract ${contractAddress}`);
+            this.logger.info(`Found enum variant "${eventName}" in contract ${contractAddress}`);
             return true;
           }
         }
       }
     }
     
-    console.error(`[Event] Event "${eventName}" not found in contract ${contractAddress} ABI`);
+    this.logger.error(`Event "${eventName}" not found in contract ${contractAddress} ABI`);
     return false;
+  }
+
+  private normalizeAddress(address: string): string {
+    return validateAndParseAddress(address).toLowerCase();
+  }
+
+  private async withTransaction<T>(
+    operation: string,
+    fn: (client: PoolClient) => Promise<T>,
+    context: Record<string, any> = {}
+  ): Promise<T | undefined> {
+    const client = await this.pool.connect();
+    try {
+      await client.query('BEGIN');
+      const result = await fn(client);
+      await client.query('COMMIT');
+      return result;
+    } catch (error) {
+      await client.query('ROLLBACK');
+      this.logger.error(`${operation} failed:`, { ...context, error });
+      return undefined;
+    } finally {
+      client.release();
+    }
   }
 
   // Process block transactions and extract events
@@ -186,8 +256,7 @@ export class StarknetIndexer {
         
         for (let eventIndex = 0; eventIndex < receipt.events.length; eventIndex++) {
           const event = receipt.events[eventIndex];
-          // Validate address at entry point (event from chain)
-          const fromAddress = validateAndParseAddress(event.from_address).toLowerCase();
+          const fromAddress = this.normalizeAddress(event.from_address);
 
           if (this.contractAddresses.size > 0 && !this.contractAddresses.has(fromAddress)) {
             continue;
@@ -197,7 +266,7 @@ export class StarknetIndexer {
             block_number: blockNumber,
             block_hash: (blockWithReceipts as any).block_hash || '',
             transaction_hash: receipt.transaction_hash,
-            from_address: fromAddress, // Use normalized address
+            from_address: fromAddress,
             event_index: eventIndex,
             keys: event.keys,
             data: event.data
@@ -207,18 +276,15 @@ export class StarknetIndexer {
           
           if (event.keys && event.keys.length > 0) {
             const eventSelector = event.keys[0];
-            // Use normalized address from above
             const specificHandlerKey = `${fromAddress}:${eventSelector}`;
             const specificHandlers = this.eventHandlers.get(specificHandlerKey) || [];
             handlerConfigs = [...specificHandlers];
           }
           
-          // Use normalized address from above
           const generalHandlers = this.eventHandlers.get(fromAddress) || [];
           handlerConfigs = [...handlerConfigs, ...generalHandlers];
           
           if (handlerConfigs.length > 0) {
-            // Use normalized address from above
             const abi = this.abiMapping.get(fromAddress);
             let parsedEvent = eventObj;
             
@@ -237,7 +303,7 @@ export class StarknetIndexer {
                     block_number: eventObj.block_number,
                     block_hash: eventObj.block_hash,
                     transaction_hash: eventObj.transaction_hash,
-                    from_address: fromAddress, // Use normalized address
+                    from_address: fromAddress,
                     event_index: eventObj.event_index,
                     keys: eventObj.keys,
                     data: eventObj.data
@@ -245,7 +311,7 @@ export class StarknetIndexer {
                   parsedEvent = parsedEventWithOriginal;
                 }
               } catch (error) {
-                console.error(`[Event] Error parsing event from contract ${fromAddress}:`, error);
+                this.logger.error(`Error parsing event from contract ${fromAddress}:`, error);
               }
             }
 
@@ -253,14 +319,14 @@ export class StarknetIndexer {
               try {
                 await handler(parsedEvent, await this.pool.connect(), this);
               } catch (error) {
-                console.error(`[Event] Error processing event handler for contract ${fromAddress}:`, error);
+                this.logger.error(`Error processing event handler for contract ${fromAddress}:`, error);
               }
             }
           }
         }
       }
     } catch (error) {
-      console.error(`[Block] Error processing block ${blockNumber} transactions:`, error);
+      this.logger.error(`Error processing block ${blockNumber} transactions:`, error);
     }
   }
   
@@ -332,25 +398,22 @@ export class StarknetIndexer {
   // Get the ABI for a contract address and cache it
   private async getContractABI(address: string): Promise<any> {
     if (!this.provider) {
-      console.error('[ABI] No RPC provider available to fetch ABI');
+      this.logger.error('No RPC provider available to fetch ABI');
       return undefined;
     }
 
     if (this.abiMapping.has(address)) {
-      console.log(`[ABI] Using cached ABI for contract ${address}`);
+      this.logger.debug(`Using cached ABI for contract ${address}`);
       return this.abiMapping.get(address);
     }
 
-    try {
-      const contractClass = await this.provider.getClassAt(address);
+    return await this.withErrorHandling('Fetching contract ABI', async () => {
+      const contractClass = await this.provider!.getClassAt(address);
       const abi = contractClass.abi;
       this.abiMapping.set(address, abi);
-      console.log(`[ABI] Cached ABI for contract ${address}`);
+      this.logger.info(`Cached ABI for contract ${address}`);
       return abi;
-    } catch (error) {
-      console.error(`[ABI] Failed to fetch ABI for contract ${address}:`, error);
-      return undefined;
-    }
+    }, { address });
   }
   
   // Register an event handler for a contract address with optional event name
@@ -365,8 +428,8 @@ export class StarknetIndexer {
       throw new Error('Handler is required');
     }
 
-    const normalizedAddress = validateAndParseAddress(contractAddress).toLowerCase();
-    console.log(`[Handler] Registering handler for contract ${normalizedAddress}${eventName ? `, event: ${eventName}` : ''}`);
+    const normalizedAddress = this.normalizeAddress(contractAddress);
+    this.logger.info(`Registering handler for contract ${normalizedAddress}${eventName ? `, event: ${eventName}` : ''}`);
     
     this.contractAddresses.add(normalizedAddress);
     
@@ -377,7 +440,7 @@ export class StarknetIndexer {
     if (eventName) {
       const isValid = await this.validateEventName(normalizedAddress, eventName);
       if (!isValid) {
-        throw new Error(`[Event] Event "${eventName}" not found in contract ${normalizedAddress} ABI`);
+        throw new Error(`Event "${eventName}" not found in contract ${normalizedAddress} ABI`);
       }
     }
     
@@ -391,49 +454,47 @@ export class StarknetIndexer {
     
     const handlers = this.eventHandlers.get(handlerKey)!;
     handlers.push(handlerConfig);
-    console.log(`[Handler] Successfully registered handler for ${handlerKey}`);
+    this.logger.info(`Successfully registered handler for ${handlerKey}`);
 
-    await this.getContractABI(normalizedAddress).catch(error => {
-      console.error(`[ABI] Failed to fetch ABI for contract ${normalizedAddress}:`, error);
-    });
+    await this.getContractABI(normalizedAddress);
   }
   
   // Start the indexer
   public async start(): Promise<void> {
     const startingBlock = await this.initializeDatabase() || 0;
-    console.log(`[Indexer] Starting from block ${this.cursor?.blockNumber}`);
+    this.logger.info(`Starting from block ${this.cursor?.blockNumber}`);
     
     const currentBlock = this.provider ? await this.provider.getBlockNumber() : 0;
     const targetBlock = this.config.startingBlockNumber || 0;
     
     try {
-      console.log('[WebSocket] Connecting to node...');
+      this.logger.info('[WebSocket] Connecting to node...');
       await this.wsChannel.waitForConnection();
-      console.log('[WebSocket] Successfully connected');
+      this.logger.info('[WebSocket] Successfully connected');
     } catch (error) {
-      console.error('[WebSocket] Failed to establish connection:', error);
+      this.logger.error('[WebSocket] Failed to establish connection:', error);
       throw error;
     }
     
     try {
-      console.log('[WebSocket] Subscribing to new heads...');
+      this.logger.info('[WebSocket] Subscribing to new heads...');
       await this.wsChannel.subscribeNewHeads();
       this.started = true;
-      console.log('[WebSocket] Successfully subscribed to new heads');
+      this.logger.info('[WebSocket] Successfully subscribed to new heads');
     } catch (error) {
-      console.error('[WebSocket] Failed to subscribe to new heads:', error);
+      this.logger.error('[WebSocket] Failed to subscribe to new heads:', error);
       throw error;
     }
     
     if (targetBlock < currentBlock && this.provider) {
-      console.log(`[Indexer] Processing historical blocks from ${targetBlock} to ${currentBlock}`);
+      this.logger.info(`Processing historical blocks from ${targetBlock} to ${currentBlock}`);
       this.isProcessingBlocks = true;
       
       try {
         for (let blockNumber = targetBlock; blockNumber <= currentBlock; blockNumber++) {
           // Skip if already processed
           if (this.cursor && blockNumber <= this.cursor.blockNumber) {
-            console.log(`[Block] Skipping block #${blockNumber} - already processed`);
+            this.logger.debug(`Skipping block #${blockNumber} - already processed`);
             continue;
           }
 
@@ -448,15 +509,15 @@ export class StarknetIndexer {
               });
             }
           } catch (error) {
-            console.error(`[Block] Error fetching block ${blockNumber}:`, error);
+            this.logger.error(`[Block] Error fetching block ${blockNumber}:`, error);
           }
         }
       } catch (error) {
-        console.error('[Indexer] Failed to fetch historical blocks:', error);
+        this.logger.error('[Indexer] Failed to fetch historical blocks:', error);
       }
       
       this.isProcessingBlocks = false;
-      console.log('[Indexer] Processing queued blocks...');
+      this.logger.info('[Indexer] Processing queued blocks...');
       await this.processBlockQueue();
     }
   }
@@ -466,18 +527,15 @@ export class StarknetIndexer {
     if (this.cursor && blockData.block_number <= this.cursor.blockNumber) {
       if (blockData.block_number === this.cursor.blockNumber && 
           blockData.block_hash !== this.cursor.blockHash) {
-        console.log(`[Reorg] Detected reorg at block #${blockData.block_number}`);
+        this.logger.info(`Detected reorg at block #${blockData.block_number}`);
         await this.handleReorg(blockData.block_number);
       } else {
-        console.log(`[Block] Skipping block #${blockData.block_number} - already processed`);
+        this.logger.debug(`Skipping block #${blockData.block_number} - already processed`);
         return;
       }
     }
     
-    const client = await this.pool.connect();
-    try {
-      await client.query('BEGIN');
-      
+    await this.withTransaction('Processing block', async (client) => {
       let timestamp;
       if (typeof blockData.timestamp === 'number') {
         timestamp = blockData.timestamp * 1000;
@@ -498,30 +556,19 @@ export class StarknetIndexer {
       ]);
       
       await this.updateCursor(blockData.block_number, blockData.block_hash, client);
-      
-      await client.query('COMMIT');
-      console.log(`[Block] Successfully processed block #${blockData.block_number}`);
+      this.logger.info(`Successfully processed block #${blockData.block_number}`);
 
       if (this.provider) {
         await this.processBlockTransactions(blockData.block_number);
       }
-    } catch (error) {
-      await client.query('ROLLBACK');
-      console.error(`[Block] Failed to process block #${blockData.block_number}:`, error);
-      throw error;
-    } finally {
-      client.release();
-    }
+    }, { blockNumber: blockData.block_number });
   }
   
   // Handle chain reorgs
   public async handleReorg(forkBlockNumber: number): Promise<void> {
-    console.log(`[Reorg] Handling reorg from block #${forkBlockNumber}`);
+    this.logger.info(`Handling reorg from block #${forkBlockNumber}`);
     
-    const client = await this.pool.connect();
-    try {
-      await client.query('BEGIN');
-      
+    await this.withTransaction('Handling reorg', async (client) => {
       await client.query(`
         UPDATE blocks
         SET is_canonical = FALSE
@@ -532,19 +579,13 @@ export class StarknetIndexer {
         await this.updateCursor(forkBlockNumber - 1, '', client);
       }
       
-      await client.query('COMMIT');
-      console.log(`[Reorg] Successfully handled reorg from block #${forkBlockNumber}`);
-    } catch (error) {
-      await client.query('ROLLBACK');
-      console.error(`[Reorg] Failed to handle reorg from block #${forkBlockNumber}:`, error);
-    } finally {
-      client.release();
-    }
+      this.logger.info(`Successfully handled reorg from block #${forkBlockNumber}`);
+    }, { forkBlockNumber });
   }
   
   // Stop the indexer
   public async stop(): Promise<void> {
-    console.log('Stopping indexer...');
+    this.logger.info('Stopping indexer...');
     this.started = false;
     
     // Unsubscribe from all subscriptions
@@ -557,28 +598,28 @@ export class StarknetIndexer {
             await this.wsChannel.unsubscribe(subId);
           }
         } catch (error) {
-          console.error(`Error unsubscribing from ${type}:`, error);
+          this.logger.error(`Error unsubscribing from ${type}:`, error);
         }
       }
     } catch (error) {
-      console.error('Error unsubscribing:', error);
+      this.logger.error('Error unsubscribing:', error);
     }
     
     // Disconnect WebSocket
     try {
       this.wsChannel.disconnect();
     } catch (error) {
-      console.error('Error disconnecting WebSocket:', error);
+      this.logger.error('Error disconnecting WebSocket:', error);
     }
     
     // Close database pool
     try {
       await this.pool.end();
     } catch (error) {
-      console.error('Error closing database pool:', error);
+      this.logger.error('Error closing database pool:', error);
     }
     
-    console.log('Indexer stopped');
+    this.logger.info('Indexer stopped');
   }
 
   private async processBlockQueue(): Promise<void> {
@@ -586,17 +627,17 @@ export class StarknetIndexer {
     
     const blocksToProcess = [...this.blockQueue];
     this.blockQueue = [];
-    console.log(`[Block] Processing ${blocksToProcess.length} queued blocks`);
+    this.logger.info(`Processing ${blocksToProcess.length} queued blocks`);
     
     for (const block of blocksToProcess) {
       try {
-        console.log(`[Block] Processing queued block #${block.block_number}`);
+        this.logger.info(`Processing queued block #${block.block_number}`);
         await this.processNewHead(block);
         if (this.provider) {
           await this.processBlockTransactions(block.block_number);
         }
       } catch (error) {
-        console.error(`[Block] Error processing queued block ${block.block_number}:`, error);
+        this.logger.error(`[Block] Error processing queued block ${block.block_number}:`, error);
       }
     }
   }
@@ -608,5 +649,18 @@ export class StarknetIndexer {
       SET last_block_number = $1, last_block_hash = $2
       WHERE id = 1 AND (cursor_key IS NULL OR cursor_key = $3)
     `, [blockNumber, blockHash, this.config.cursorKey || null]);
+  }
+
+  private async withErrorHandling<T>(
+    operation: string,
+    fn: () => Promise<T>,
+    context: Record<string, any> = {}
+  ): Promise<T | undefined> {
+    try {
+      return await fn();
+    } catch (error) {
+      this.logger.error(`${operation} failed:`, { ...context, error });
+      return undefined;
+    }
   }
 }
