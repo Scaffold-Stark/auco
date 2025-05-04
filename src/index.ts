@@ -12,12 +12,10 @@ export interface IndexerConfig {
   contractAddresses?: string[];
 }
 
-export type EventHandler = (event: any, client: PoolClient) => Promise<void>;
+export type EventHandler = (event: any, client: PoolClient, indexer: StarknetIndexer) => Promise<void>;
 
 interface EventHandlerConfig {
   handler: EventHandler;
-  parseEvents: boolean;
-  abi?: any;
 }
 
 interface QueuedEvent {
@@ -36,6 +34,7 @@ export class StarknetIndexer {
   private isProcessingQueue: boolean = false;
   private maxConcurrentEvents: number;
   private contractAddresses: Set<string> = new Set();
+  private abiMapping: Map<string, any> = new Map();
   
   constructor(private config: IndexerConfig) {
     this.pool = new Pool({
@@ -150,6 +149,7 @@ export class StarknetIndexer {
           
           const eventObj = {
             block_number: blockNumber,
+            block_hash: (blockWithReceipts as any).block_hash || '',
             transaction_hash: receipt.transaction_hash,
             from_address: fromAddress,
             event_index: eventIndex,
@@ -170,14 +170,43 @@ export class StarknetIndexer {
           handlerConfigs = [...handlerConfigs, ...generalHandlers];
           
           if (handlerConfigs.length > 0) {
-            for (const { handler, parseEvents, abi } of handlerConfigs) {
+            // Get the cached ABI for this contract
+            const abi = this.abiMapping.get(fromAddress);
+            let parsedEvent = eventObj;
+            
+            if (abi) {
               try {
-                if (parseEvents) {
-                  const parsedEvent = await this.parseEvent(eventObj, abi);
-                  await handler(parsedEvent, await this.pool.connect());
-                } else {
-                  await handler(eventObj, await this.pool.connect());
+                // Extract ABI components
+                const abiEvents = events.getAbiEvents(abi);
+                const abiStructs = CallData.getAbiStruct(abi);
+                const abiEnums = CallData.getAbiEnum(abi);
+
+                // Parse the event
+                const parsedEvents = events.parseEvents([eventObj], abiEvents, abiStructs, abiEnums);
+                
+                if (parsedEvents && parsedEvents.length > 0) {
+                  // Add raw event reference and original fields for convenience
+                  const parsedEventWithOriginal = {
+                    ...parsedEvents[0],
+                    _rawEvent: eventObj,
+                    block_number: eventObj.block_number,
+                    block_hash: eventObj.block_hash,
+                    transaction_hash: eventObj.transaction_hash,
+                    from_address: eventObj.from_address,
+                    event_index: eventObj.event_index,
+                    keys: eventObj.keys,
+                    data: eventObj.data
+                  };
+                  parsedEvent = parsedEventWithOriginal;
                 }
+              } catch (error) {
+                console.error(`Error parsing event:`, error);
+              }
+            }
+
+            for (const { handler } of handlerConfigs) {
+              try {
+                await handler(parsedEvent, await this.pool.connect(), this);
               } catch (error) {
                 console.error(`Error processing historical event handler:`, error);
               }
@@ -252,21 +281,40 @@ export class StarknetIndexer {
     }
   }
   
-  // Register an event handler for a contract address with optional event key, ABI and parseEvents flag
+  // Get the ABI for a contract address and cache it
+  private async getContractABI(address: string): Promise<any> {
+    if (!this.provider) {
+      console.warn('No RPC provider available to fetch ABI');
+      return undefined;
+    }
+
+    const normalizedAddress = validateAndParseAddress(address).toLowerCase();
+    
+    // Return cached ABI if available
+    if (this.abiMapping.has(normalizedAddress)) {
+      return this.abiMapping.get(normalizedAddress);
+    }
+
+    try {
+      const contractClass = await this.provider.getClassAt(normalizedAddress);
+      const abi = contractClass.abi;
+      this.abiMapping.set(normalizedAddress, abi);
+      console.log(`Cached ABI for contract ${normalizedAddress}`);
+      return abi;
+    } catch (error) {
+      console.warn(`Failed to fetch ABI for contract ${normalizedAddress}:`, error);
+      return undefined;
+    }
+  }
+  
+  // Register an event handler for a contract address with optional event key
   public onEvent(fromAddress: string, handler: EventHandler): void;
   public onEvent(fromAddress: string, eventKey: string, handler: EventHandler): void;
-  public onEvent(fromAddress: string, eventKey: string, options: { abi: any; parseEvents: boolean }, handler: EventHandler): void;
-  public onEvent(fromAddress: string, arg1: string | EventHandler, arg2?: EventHandler | { abi: Abi; parseEvents: boolean }, arg3?: EventHandler): void {
+  public onEvent(fromAddress: string, arg1: string | EventHandler, arg2?: EventHandler): void {
     let eventKey: string | undefined;
     let handler: EventHandler;
-    let options: { abi: any; parseEvents: boolean } = { abi: undefined, parseEvents: false };
 
-    if (typeof arg3 === 'function') {
-      // Format: (address, eventKey, options, handler)
-      eventKey = arg1 as string;
-      options = arg2 as { abi: any; parseEvents: boolean };
-      handler = arg3;
-    } else if (typeof arg2 === 'function') {
+    if (typeof arg2 === 'function') {
       // Format: (address, eventKey, handler)
       eventKey = arg1 as string;
       handler = arg2;
@@ -283,18 +331,21 @@ export class StarknetIndexer {
     
     // Create handler config
     const handlerConfig: EventHandlerConfig = {
-      handler,
-      parseEvents: options.parseEvents,
-      abi: options.abi
+      handler
     };
     
     const key = eventKey ? `${normalizedAddress}:${eventKey}` : normalizedAddress;
-    console.log(`Registering handler for key: ${key}, parseEvents: ${handlerConfig.parseEvents}`);
+    console.log(`Registering handler for key: ${key}`);
     
     if (!this.eventHandlers.has(key)) {
       this.eventHandlers.set(key, []);
     }
     this.eventHandlers.get(key)?.push(handlerConfig);
+
+    // Fetch and cache the ABI for this contract
+    this.getContractABI(normalizedAddress).catch(error => {
+      console.error(`Failed to fetch ABI for contract ${normalizedAddress}:`, error);
+    });
   }
   
   // Start the indexer
@@ -423,39 +474,6 @@ export class StarknetIndexer {
     }
   }
   
-  // Process a single event
-  private async processEvent(event: any): Promise<void> {
-    const blockNumber = event.block_number;
-    
-    if (!blockNumber) {
-      console.error('Invalid event data structure:', event);
-      return;
-    }
-
-    // Get handlers for this address
-    const normalizedAddress = event.from_address.toLowerCase();
-    let handlerConfigs: EventHandlerConfig[] = [];
-    
-    // Check for handlers for this address (with or without event key)
-    if (event.keys && event.keys.length > 0) {
-      const eventKey = event.keys[0];
-      const specificHandlerKey = `${normalizedAddress}:${eventKey}`;
-      const specificHandlers = this.eventHandlers.get(specificHandlerKey) || [];
-      handlerConfigs = [...specificHandlers];
-    }
-    
-    // Also get general handlers for this address
-    const generalHandlers = this.eventHandlers.get(normalizedAddress) || [];
-    handlerConfigs = [...handlerConfigs, ...generalHandlers];
-    
-    if (handlerConfigs.length > 0) {
-      console.log(`Found ${handlerConfigs.length} handlers for event from ${event.from_address}, enqueueing`);
-      this.enqueueEvent(event, handlerConfigs);
-    } else {
-      console.log(`No handlers found for event from ${event.from_address}, skipping`);
-    }
-  }
-  
   // Handle chain reorgs
   public async handleReorg(forkBlockNumber: number): Promise<void> {
     console.log(`Handling reorg from block #${forkBlockNumber}`);
@@ -563,15 +581,44 @@ export class StarknetIndexer {
               continue;
             }
 
-            // Process all handlers for the event
-            for (const { handler, parseEvents, abi } of handlers) {
+            // Get the cached ABI for this contract
+            const abi = this.abiMapping.get(event.from_address);
+            let parsedEvent = event;
+            
+            if (abi) {
               try {
-                if (parseEvents) {
-                  const parsedEvent = await this.parseEvent(event, abi);
-                  await handler(parsedEvent, client);
-                } else {
-                  await handler(event, client);
+                // Extract ABI components
+                const abiEvents = events.getAbiEvents(abi);
+                const abiStructs = CallData.getAbiStruct(abi);
+                const abiEnums = CallData.getAbiEnum(abi);
+
+                // Parse the event
+                const parsedEvents = events.parseEvents([event], abiEvents, abiStructs, abiEnums);
+                
+                if (parsedEvents && parsedEvents.length > 0) {
+                  // Add raw event reference and original fields for convenience
+                  const parsedEventWithOriginal = {
+                    ...parsedEvents[0],
+                    _rawEvent: event,
+                    block_number: event.block_number,
+                    block_hash: event.block_hash,
+                    transaction_hash: event.transaction_hash,
+                    from_address: event.from_address,
+                    event_index: event.event_index,
+                    keys: event.keys,
+                    data: event.data
+                  };
+                  parsedEvent = parsedEventWithOriginal;
                 }
+              } catch (error) {
+                console.error(`Error parsing event:`, error);
+              }
+            }
+
+            // Process all handlers for the event
+            for (const { handler } of handlers) {
+              try {
+                await handler(parsedEvent, client, this);
               } catch (error) {
                 console.error(`Error processing event handler:`, error);
                 // Continue with other handlers even if one fails
@@ -609,35 +656,6 @@ export class StarknetIndexer {
     // Start processing if not already processing
     if (!this.isProcessingQueue) {
       setImmediate(() => this.processEventQueue());
-    }
-  }
-
-  private async parseEvent(event: any, abi?: any): Promise<any> {
-    if (!abi) {
-      console.warn('No ABI provided for event parsing, returning raw event');
-      return event;
-    }
-
-    try {
-      // Extract ABI components
-      const abiEvents = events.getAbiEvents(abi);
-      const abiStructs = CallData.getAbiStruct(abi);
-      const abiEnums = CallData.getAbiEnum(abi);
-
-      // Parse the event
-      const parsedEvents = events.parseEvents([event], abiEvents, abiStructs, abiEnums);
-      
-      if (parsedEvents && parsedEvents.length > 0) {
-        // Add raw event reference for convenience
-        parsedEvents[0]._rawEvent = event;
-        return parsedEvents[0];
-      }
-
-      console.warn('No parsed events returned, returning raw event');
-      return event;
-    } catch (error) {
-      console.error('Error parsing event:', error);
-      return event; // Return raw event on parsing error
     }
   }
 }

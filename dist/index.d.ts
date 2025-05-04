@@ -8,7 +8,7 @@ export interface IndexerConfig {
     maxConcurrentEvents?: number;
     contractAddresses?: string[];
 }
-export type EventHandler = (event: any, client: PoolClient) => Promise<void>;
+export type EventHandler = (event: any, client: PoolClient, indexer: StarknetIndexer) => Promise<void>;
 export declare class StarknetIndexer {
     private config;
     private wsChannel;
@@ -20,16 +20,14 @@ export declare class StarknetIndexer {
     private isProcessingQueue;
     private maxConcurrentEvents;
     private contractAddresses;
+    private abiMapping;
     constructor(config: IndexerConfig);
     private setupEventHandlers;
     private processBlockTransactions;
     initializeDatabase(): Promise<number | undefined>;
+    private getContractABI;
     onEvent(fromAddress: string, handler: EventHandler): void;
     onEvent(fromAddress: string, eventKey: string, handler: EventHandler): void;
-    onEvent(fromAddress: string, eventKey: string, options: {
-        abi: any;
-        parseEvents: boolean;
-    }, handler: EventHandler): void;
     start(): Promise<void>;
     private processNewHead;
     private processEvent;
@@ -37,5 +35,4 @@ export declare class StarknetIndexer {
     stop(): Promise<void>;
     private processEventQueue;
     private enqueueEvent;
-    private parseEvent;
 }
