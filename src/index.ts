@@ -57,7 +57,8 @@ export class StarknetIndexer {
 
     if (config.contractAddresses) {
       config.contractAddresses.forEach(address => {
-        this.contractAddresses.add(validateAndParseAddress(address).toLowerCase());
+        const normalizedAddress = validateAndParseAddress(address).toLowerCase();
+        this.contractAddresses.add(normalizedAddress);
       });
     }
 
@@ -185,6 +186,7 @@ export class StarknetIndexer {
         
         for (let eventIndex = 0; eventIndex < receipt.events.length; eventIndex++) {
           const event = receipt.events[eventIndex];
+          // Validate address at entry point (event from chain)
           const fromAddress = validateAndParseAddress(event.from_address).toLowerCase();
 
           if (this.contractAddresses.size > 0 && !this.contractAddresses.has(fromAddress)) {
@@ -195,7 +197,7 @@ export class StarknetIndexer {
             block_number: blockNumber,
             block_hash: (blockWithReceipts as any).block_hash || '',
             transaction_hash: receipt.transaction_hash,
-            from_address: fromAddress,
+            from_address: fromAddress, // Use normalized address
             event_index: eventIndex,
             keys: event.keys,
             data: event.data
@@ -205,15 +207,18 @@ export class StarknetIndexer {
           
           if (event.keys && event.keys.length > 0) {
             const eventSelector = event.keys[0];
+            // Use normalized address from above
             const specificHandlerKey = `${fromAddress}:${eventSelector}`;
             const specificHandlers = this.eventHandlers.get(specificHandlerKey) || [];
             handlerConfigs = [...specificHandlers];
           }
           
+          // Use normalized address from above
           const generalHandlers = this.eventHandlers.get(fromAddress) || [];
           handlerConfigs = [...handlerConfigs, ...generalHandlers];
           
           if (handlerConfigs.length > 0) {
+            // Use normalized address from above
             const abi = this.abiMapping.get(fromAddress);
             let parsedEvent = eventObj;
             
@@ -232,7 +237,7 @@ export class StarknetIndexer {
                     block_number: eventObj.block_number,
                     block_hash: eventObj.block_hash,
                     transaction_hash: eventObj.transaction_hash,
-                    from_address: eventObj.from_address,
+                    from_address: fromAddress, // Use normalized address
                     event_index: eventObj.event_index,
                     keys: eventObj.keys,
                     data: eventObj.data
@@ -331,21 +336,19 @@ export class StarknetIndexer {
       return undefined;
     }
 
-    const normalizedAddress = validateAndParseAddress(address).toLowerCase();
-    
-    if (this.abiMapping.has(normalizedAddress)) {
-      console.log(`[ABI] Using cached ABI for contract ${normalizedAddress}`);
-      return this.abiMapping.get(normalizedAddress);
+    if (this.abiMapping.has(address)) {
+      console.log(`[ABI] Using cached ABI for contract ${address}`);
+      return this.abiMapping.get(address);
     }
 
     try {
-      const contractClass = await this.provider.getClassAt(normalizedAddress);
+      const contractClass = await this.provider.getClassAt(address);
       const abi = contractClass.abi;
-      this.abiMapping.set(normalizedAddress, abi);
-      console.log(`[ABI] Cached ABI for contract ${normalizedAddress}`);
+      this.abiMapping.set(address, abi);
+      console.log(`[ABI] Cached ABI for contract ${address}`);
       return abi;
     } catch (error) {
-      console.error(`[ABI] Failed to fetch ABI for contract ${normalizedAddress}:`, error);
+      console.error(`[ABI] Failed to fetch ABI for contract ${address}:`, error);
       return undefined;
     }
   }
