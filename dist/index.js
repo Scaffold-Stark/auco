@@ -119,9 +119,40 @@ class StarknetIndexer {
                         keys: event.keys,
                         data: event.data
                     };
-                    console.log("eventObj", eventObj);
-                    // Find handlers for this event
-                    await this.processEvent(eventObj);
+                    // Get handlers for this address
+                    let handlerConfigs = [];
+                    // Check for handlers for this address (with or without event key)
+                    if (event.keys && event.keys.length > 0) {
+                        const eventKey = event.keys[0];
+                        const specificHandlerKey = `${fromAddress}:${eventKey}`;
+                        const specificHandlers = this.eventHandlers.get(specificHandlerKey) || [];
+                        console.log("specificHandlers", specificHandlers);
+                        console.log("specificHandlerKey", specificHandlerKey);
+                        console.log("eventObj", eventObj);
+                        console.log(this.eventHandlers);
+                        handlerConfigs = [...specificHandlers];
+                    }
+                    // Also get general handlers for this address
+                    const generalHandlers = this.eventHandlers.get(fromAddress) || [];
+                    handlerConfigs = [...handlerConfigs, ...generalHandlers];
+                    if (handlerConfigs.length > 0) {
+                        // Process each handler
+                        for (const { handler, parseEvents, abi } of handlerConfigs) {
+                            try {
+                                if (parseEvents) {
+                                    const parsedEvent = await this.parseEvent(eventObj, abi);
+                                    await handler(parsedEvent, await this.pool.connect());
+                                }
+                                else {
+                                    await handler(eventObj, await this.pool.connect());
+                                }
+                            }
+                            catch (error) {
+                                console.error(`Error processing historical event handler:`, error);
+                                // Continue with other handlers even if one fails
+                            }
+                        }
+                    }
                 }
             }
         }
@@ -188,31 +219,41 @@ class StarknetIndexer {
             client.release();
         }
     }
-    onEvent(fromAddress, arg1, arg2) {
+    onEvent(fromAddress, arg1, arg2, arg3) {
         let eventKey;
         let handler;
-        if (typeof arg2 === 'function') {
+        let options = { abi: undefined, parseEvents: false };
+        if (typeof arg3 === 'function') {
+            // Format: (address, eventKey, options, handler)
+            eventKey = arg1;
+            options = arg2;
+            handler = arg3;
+        }
+        else if (typeof arg2 === 'function') {
+            // Format: (address, eventKey, handler)
             eventKey = arg1;
             handler = arg2;
         }
         else {
+            // Format: (address, handler)
             handler = arg1;
         }
         // Normalize address to lowercase
         const normalizedAddress = (0, starknet_1.validateAndParseAddress)(fromAddress).toLowerCase();
         // Add to contract addresses set
         this.contractAddresses.add(normalizedAddress);
+        // Create handler config
+        const handlerConfig = {
+            handler,
+            parseEvents: options.parseEvents,
+            abi: options.abi
+        };
         const key = eventKey ? `${normalizedAddress}:${eventKey}` : normalizedAddress;
-        console.log(`Registering handler for key: ${key}`);
+        console.log(`Registering handler for key: ${key}, parseEvents: ${handlerConfig.parseEvents}`);
         if (!this.eventHandlers.has(key)) {
             this.eventHandlers.set(key, []);
         }
-        this.eventHandlers.get(key)?.push(handler);
-        // Log all registered handlers
-        console.log('Current registered handlers:', Array.from(this.eventHandlers.entries()).map(([k, h]) => ({
-            key: k,
-            handlerCount: h.length
-        })));
+        this.eventHandlers.get(key)?.push(handlerConfig);
     }
     // Start the indexer
     async start() {
@@ -339,20 +380,20 @@ class StarknetIndexer {
         }
         // Get handlers for this address
         const normalizedAddress = event.from_address.toLowerCase();
-        let handlers = [];
+        let handlerConfigs = [];
         // Check for handlers for this address (with or without event key)
         if (event.keys && event.keys.length > 0) {
             const eventKey = event.keys[0];
             const specificHandlerKey = `${normalizedAddress}:${eventKey}`;
             const specificHandlers = this.eventHandlers.get(specificHandlerKey) || [];
-            handlers = [...specificHandlers];
+            handlerConfigs = [...specificHandlers];
         }
         // Also get general handlers for this address
         const generalHandlers = this.eventHandlers.get(normalizedAddress) || [];
-        handlers = [...handlers, ...generalHandlers];
-        if (handlers.length > 0) {
-            console.log(`Found ${handlers.length} handlers for event from ${event.from_address}, enqueueing`);
-            this.enqueueEvent(event, handlers);
+        handlerConfigs = [...handlerConfigs, ...generalHandlers];
+        if (handlerConfigs.length > 0) {
+            console.log(`Found ${handlerConfigs.length} handlers for event from ${event.from_address}, enqueueing`);
+            this.enqueueEvent(event, handlerConfigs);
         }
         else {
             console.log(`No handlers found for event from ${event.from_address}, skipping`);
@@ -452,9 +493,15 @@ class StarknetIndexer {
                             continue;
                         }
                         // Process all handlers for the event
-                        for (const handler of handlers) {
+                        for (const { handler, parseEvents, abi } of handlers) {
                             try {
-                                await handler(event, client);
+                                if (parseEvents) {
+                                    const parsedEvent = await this.parseEvent(event, abi);
+                                    await handler(parsedEvent, client);
+                                }
+                                else {
+                                    await handler(event, client);
+                                }
                             }
                             catch (error) {
                                 console.error(`Error processing event handler:`, error);
@@ -482,15 +529,40 @@ class StarknetIndexer {
             }
         }
     }
-    enqueueEvent(event, handlers) {
+    enqueueEvent(event, handlerConfigs) {
         this.eventQueue.push({
             event,
-            handlers,
+            handlers: handlerConfigs,
             timestamp: Date.now()
         });
         // Start processing if not already processing
         if (!this.isProcessingQueue) {
             setImmediate(() => this.processEventQueue());
+        }
+    }
+    async parseEvent(event, abi) {
+        if (!abi) {
+            console.warn('No ABI provided for event parsing, returning raw event');
+            return event;
+        }
+        try {
+            // Extract ABI components
+            const abiEvents = starknet_1.events.getAbiEvents(abi);
+            const abiStructs = starknet_1.CallData.getAbiStruct(abi);
+            const abiEnums = starknet_1.CallData.getAbiEnum(abi);
+            // Parse the event
+            const parsedEvents = starknet_1.events.parseEvents([event], abiEvents, abiStructs, abiEnums);
+            if (parsedEvents && parsedEvents.length > 0) {
+                // Add raw event reference for convenience
+                parsedEvents[0]._rawEvent = event;
+                return parsedEvents[0];
+            }
+            console.warn('No parsed events returned, returning raw event');
+            return event;
+        }
+        catch (error) {
+            console.error('Error parsing event:', error);
+            return event; // Return raw event on parsing error
         }
     }
 }

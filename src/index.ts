@@ -1,5 +1,6 @@
-import { WebSocketChannel, RpcProvider, validateAndParseAddress } from 'starknet';
+import { WebSocketChannel, RpcProvider, validateAndParseAddress, CallData, events, Abi } from 'starknet';
 import { Pool, PoolClient } from 'pg';
+import { hash } from 'starknet';
 
 export interface IndexerConfig {
   wsNodeUrl: string;
@@ -13,16 +14,22 @@ export interface IndexerConfig {
 
 export type EventHandler = (event: any, client: PoolClient) => Promise<void>;
 
+interface EventHandlerConfig {
+  handler: EventHandler;
+  parseEvents: boolean;
+  abi?: any;
+}
+
 interface QueuedEvent {
   event: any;
-  handlers: EventHandler[];
+  handlers: EventHandlerConfig[];
   timestamp: number;
 }
 
 export class StarknetIndexer {
   private wsChannel: WebSocketChannel;
   private pool: Pool;
-  private eventHandlers: Map<string, EventHandler[]> = new Map();
+  private eventHandlers: Map<string, EventHandlerConfig[]> = new Map();
   private started: boolean = false;
   private provider?: RpcProvider;
   private eventQueue: QueuedEvent[] = [];
@@ -122,23 +129,17 @@ export class StarknetIndexer {
     if (!this.provider) return;
     
     try {
-      console.log(`Fetching block ${blockNumber} with receipts`);
       const blockWithReceipts = await this.provider.getBlockWithReceipts(blockNumber);
       
       if (!blockWithReceipts || !blockWithReceipts.transactions) {
-        console.log(`No transactions found in block ${blockNumber}`);
         return;
       }
       
-      console.log(`Processing ${blockWithReceipts.transactions.length} transactions in block ${blockNumber}`);
-      
-      // Process each transaction's events
       for (const txWithReceipt of blockWithReceipts.transactions) {
         const receipt = txWithReceipt.receipt;
         
         if (!receipt.events || receipt.events.length === 0) continue;
         
-        // Process each event in the transaction
         for (let eventIndex = 0; eventIndex < receipt.events.length; eventIndex++) {
           const event = receipt.events[eventIndex];
           const fromAddress = validateAndParseAddress(event.from_address).toLowerCase();
@@ -147,7 +148,6 @@ export class StarknetIndexer {
             continue;
           }
           
-          // Create a standardized event object
           const eventObj = {
             block_number: blockNumber,
             transaction_hash: receipt.transaction_hash,
@@ -157,10 +157,32 @@ export class StarknetIndexer {
             data: event.data
           };
 
-          console.log("eventObj", eventObj);
+          let handlerConfigs: EventHandlerConfig[] = [];
           
-          // Find handlers for this event
-          await this.processEvent(eventObj);
+          if (event.keys && event.keys.length > 0) {
+            const eventKey = event.keys[0];
+            const specificHandlerKey = `${fromAddress}:${eventKey}`;
+            const specificHandlers = this.eventHandlers.get(specificHandlerKey) || [];
+            handlerConfigs = [...specificHandlers];
+          }
+          
+          const generalHandlers = this.eventHandlers.get(fromAddress) || [];
+          handlerConfigs = [...handlerConfigs, ...generalHandlers];
+          
+          if (handlerConfigs.length > 0) {
+            for (const { handler, parseEvents, abi } of handlerConfigs) {
+              try {
+                if (parseEvents) {
+                  const parsedEvent = await this.parseEvent(eventObj, abi);
+                  await handler(parsedEvent, await this.pool.connect());
+                } else {
+                  await handler(eventObj, await this.pool.connect());
+                }
+              } catch (error) {
+                console.error(`Error processing historical event handler:`, error);
+              }
+            }
+          }
         }
       }
     } catch (error) {
@@ -230,17 +252,26 @@ export class StarknetIndexer {
     }
   }
   
-  // Register an event handler for a contract address with optional event key
+  // Register an event handler for a contract address with optional event key, ABI and parseEvents flag
   public onEvent(fromAddress: string, handler: EventHandler): void;
   public onEvent(fromAddress: string, eventKey: string, handler: EventHandler): void;
-  public onEvent(fromAddress: string, arg1: string | EventHandler, arg2?: EventHandler): void {
+  public onEvent(fromAddress: string, eventKey: string, options: { abi: any; parseEvents: boolean }, handler: EventHandler): void;
+  public onEvent(fromAddress: string, arg1: string | EventHandler, arg2?: EventHandler | { abi: Abi; parseEvents: boolean }, arg3?: EventHandler): void {
     let eventKey: string | undefined;
     let handler: EventHandler;
-    
-    if (typeof arg2 === 'function') {
+    let options: { abi: any; parseEvents: boolean } = { abi: undefined, parseEvents: false };
+
+    if (typeof arg3 === 'function') {
+      // Format: (address, eventKey, options, handler)
+      eventKey = arg1 as string;
+      options = arg2 as { abi: any; parseEvents: boolean };
+      handler = arg3;
+    } else if (typeof arg2 === 'function') {
+      // Format: (address, eventKey, handler)
       eventKey = arg1 as string;
       handler = arg2;
     } else {
+      // Format: (address, handler)
       handler = arg1 as EventHandler;
     }
 
@@ -250,19 +281,20 @@ export class StarknetIndexer {
     // Add to contract addresses set
     this.contractAddresses.add(normalizedAddress);
     
+    // Create handler config
+    const handlerConfig: EventHandlerConfig = {
+      handler,
+      parseEvents: options.parseEvents,
+      abi: options.abi
+    };
+    
     const key = eventKey ? `${normalizedAddress}:${eventKey}` : normalizedAddress;
-    console.log(`Registering handler for key: ${key}`);
+    console.log(`Registering handler for key: ${key}, parseEvents: ${handlerConfig.parseEvents}`);
     
     if (!this.eventHandlers.has(key)) {
       this.eventHandlers.set(key, []);
     }
-    this.eventHandlers.get(key)?.push(handler);
-    
-    // Log all registered handlers
-    console.log('Current registered handlers:', Array.from(this.eventHandlers.entries()).map(([k, h]) => ({
-      key: k,
-      handlerCount: h.length
-    })));
+    this.eventHandlers.get(key)?.push(handlerConfig);
   }
   
   // Start the indexer
@@ -402,23 +434,23 @@ export class StarknetIndexer {
 
     // Get handlers for this address
     const normalizedAddress = event.from_address.toLowerCase();
-    let handlers: EventHandler[] = [];
+    let handlerConfigs: EventHandlerConfig[] = [];
     
     // Check for handlers for this address (with or without event key)
     if (event.keys && event.keys.length > 0) {
       const eventKey = event.keys[0];
       const specificHandlerKey = `${normalizedAddress}:${eventKey}`;
       const specificHandlers = this.eventHandlers.get(specificHandlerKey) || [];
-      handlers = [...specificHandlers];
+      handlerConfigs = [...specificHandlers];
     }
     
     // Also get general handlers for this address
     const generalHandlers = this.eventHandlers.get(normalizedAddress) || [];
-    handlers = [...handlers, ...generalHandlers];
+    handlerConfigs = [...handlerConfigs, ...generalHandlers];
     
-    if (handlers.length > 0) {
-      console.log(`Found ${handlers.length} handlers for event from ${event.from_address}, enqueueing`);
-      this.enqueueEvent(event, handlers);
+    if (handlerConfigs.length > 0) {
+      console.log(`Found ${handlerConfigs.length} handlers for event from ${event.from_address}, enqueueing`);
+      this.enqueueEvent(event, handlerConfigs);
     } else {
       console.log(`No handlers found for event from ${event.from_address}, skipping`);
     }
@@ -532,9 +564,14 @@ export class StarknetIndexer {
             }
 
             // Process all handlers for the event
-            for (const handler of handlers) {
+            for (const { handler, parseEvents, abi } of handlers) {
               try {
-                await handler(event, client);
+                if (parseEvents) {
+                  const parsedEvent = await this.parseEvent(event, abi);
+                  await handler(parsedEvent, client);
+                } else {
+                  await handler(event, client);
+                }
               } catch (error) {
                 console.error(`Error processing event handler:`, error);
                 // Continue with other handlers even if one fails
@@ -562,16 +599,45 @@ export class StarknetIndexer {
     }
   }
 
-  private enqueueEvent(event: any, handlers: EventHandler[]): void {
+  private enqueueEvent(event: any, handlerConfigs: EventHandlerConfig[]): void {
     this.eventQueue.push({
       event,
-      handlers,
+      handlers: handlerConfigs,
       timestamp: Date.now()
     });
     
     // Start processing if not already processing
     if (!this.isProcessingQueue) {
       setImmediate(() => this.processEventQueue());
+    }
+  }
+
+  private async parseEvent(event: any, abi?: any): Promise<any> {
+    if (!abi) {
+      console.warn('No ABI provided for event parsing, returning raw event');
+      return event;
+    }
+
+    try {
+      // Extract ABI components
+      const abiEvents = events.getAbiEvents(abi);
+      const abiStructs = CallData.getAbiStruct(abi);
+      const abiEnums = CallData.getAbiEnum(abi);
+
+      // Parse the event
+      const parsedEvents = events.parseEvents([event], abiEvents, abiStructs, abiEnums);
+      
+      if (parsedEvents && parsedEvents.length > 0) {
+        // Add raw event reference for convenience
+        parsedEvents[0]._rawEvent = event;
+        return parsedEvents[0];
+      }
+
+      console.warn('No parsed events returned, returning raw event');
+      return event;
+    } catch (error) {
+      console.error('Error parsing event:', error);
+      return event; // Return raw event on parsing error
     }
   }
 }

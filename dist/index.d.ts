@@ -26,6 +26,10 @@ export declare class StarknetIndexer {
     initializeDatabase(): Promise<number | undefined>;
     onEvent(fromAddress: string, handler: EventHandler): void;
     onEvent(fromAddress: string, eventKey: string, handler: EventHandler): void;
+    onEvent(fromAddress: string, eventKey: string, options: {
+        abi: any;
+        parseEvents: boolean;
+    }, handler: EventHandler): void;
     start(): Promise<void>;
     private processNewHead;
     private processEvent;
@@ -33,4 +37,5 @@ export declare class StarknetIndexer {
     stop(): Promise<void>;
     private processEventQueue;
     private enqueueEvent;
+    private parseEvent;
 }
