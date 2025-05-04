@@ -1,14 +1,11 @@
-import { WebSocketChannel, RpcProvider, validateAndParseAddress, CallData, events, Abi } from 'starknet';
+import { WebSocketChannel, RpcProvider, validateAndParseAddress, CallData, events, Abi, hash } from 'starknet';
 import { Pool, PoolClient } from 'pg';
-import { hash } from 'starknet';
 
 export interface IndexerConfig {
   wsNodeUrl: string;
   rpcNodeUrl?: string | undefined;
   databaseUrl: string;
   startingBlockNumber?: number;
-  fetchHistoricalEvents?: boolean;
-  maxConcurrentEvents?: number;
   contractAddresses?: string[];
 }
 
@@ -18,10 +15,17 @@ interface EventHandlerConfig {
   handler: EventHandler;
 }
 
-interface QueuedEvent {
-  event: any;
-  handlers: EventHandlerConfig[];
+interface QueuedBlock {
+  block_number: number;
+  block_hash: string;
+  parent_hash: string;
   timestamp: number;
+}
+
+interface EventHandlerParams {
+  contractAddress: string;
+  eventName?: string;
+  handler: EventHandler;
 }
 
 export class StarknetIndexer {
@@ -30,9 +34,8 @@ export class StarknetIndexer {
   private eventHandlers: Map<string, EventHandlerConfig[]> = new Map();
   private started: boolean = false;
   private provider?: RpcProvider;
-  private eventQueue: QueuedEvent[] = [];
-  private isProcessingQueue: boolean = false;
-  private maxConcurrentEvents: number;
+  private blockQueue: QueuedBlock[] = [];
+  private isProcessingBlocks: boolean = false;
   private contractAddresses: Set<string> = new Set();
   private abiMapping: Map<string, any> = new Map();
   
@@ -44,8 +47,6 @@ export class StarknetIndexer {
     this.wsChannel = new WebSocketChannel({
       nodeUrl: config.wsNodeUrl
     });
-
-    this.maxConcurrentEvents = config.maxConcurrentEvents || 5;
 
     if (config.contractAddresses) {
       config.contractAddresses.forEach(address => {
@@ -67,21 +68,23 @@ export class StarknetIndexer {
   private setupEventHandlers() {
     // Handle new block heads
     this.wsChannel.onNewHeads = async (data) => {
-      console.log('New block received:', data.result.block_number);
       try {
-        const blockNumber = data.result.block_number;
-        
-        // Store block data
-        await this.processNewHead({
-          block_number: blockNumber,
+        const blockData = {
+          block_number: data.result.block_number,
           block_hash: data.result.block_hash,
           parent_hash: data.result.parent_hash,
           timestamp: data.result.timestamp
-        });
+        };
         
-        // If we have a provider, fetch the block with receipts to get the transactions
-        if (this.provider) {
-          await this.processBlockTransactions(blockNumber);
+        // If we're processing historical blocks, queue the new block
+        if (this.isProcessingBlocks) {
+          this.blockQueue.push(blockData);
+        } else {
+          // Otherwise process it immediately
+          await this.processNewHead(blockData);
+          if (this.provider) {
+            await this.processBlockTransactions(blockData.block_number);
+          }
         }
       } catch (error) {
         console.error('Error processing new head:', error);
@@ -90,9 +93,6 @@ export class StarknetIndexer {
     
     // Handle reorgs
     this.wsChannel.onReorg = async (data) => {
-      console.log('Reorg detected:', data);
-      
-      // Get the starting block number from the reorg data
       const reorgPoint = data.result?.starting_block_number;
       
       if (reorgPoint) {
@@ -103,19 +103,14 @@ export class StarknetIndexer {
     // Handle connection errors
     this.wsChannel.onError = (error) => {
       console.error('WebSocket error:', error);
-      // Reconnection is handled automatically by the library
     };
     
     // Handle connection closure
     this.wsChannel.onClose = async (event) => {
-      console.log('WebSocket connection closed:', event);
       if (this.started) {
-        console.log('Attempting to reconnect...');
         try {
           await this.wsChannel.reconnect();
-          // After reconnection, resubscribe to new heads
           await this.wsChannel.subscribeNewHeads();
-          console.log('Successfully reconnected and resubscribed to new heads');
         } catch (error) {
           console.error('Failed to reconnect:', error);
         }
@@ -123,6 +118,16 @@ export class StarknetIndexer {
     };
   }
   
+  private getEventSelector(eventName: string): string {
+    const cleanName = eventName.includes('::') 
+      ? eventName.split('::').pop() 
+      : eventName;
+    if (!cleanName) {
+      throw new Error(`Invalid event name: ${eventName}`);
+    }
+    return hash.getSelectorFromName(cleanName);
+  }
+
   // Process block transactions and extract events
   private async processBlockTransactions(blockNumber: number): Promise<void> {
     if (!this.provider) return;
@@ -160,8 +165,8 @@ export class StarknetIndexer {
           let handlerConfigs: EventHandlerConfig[] = [];
           
           if (event.keys && event.keys.length > 0) {
-            const eventKey = event.keys[0];
-            const specificHandlerKey = `${fromAddress}:${eventKey}`;
+            const eventSelector = event.keys[0];
+            const specificHandlerKey = `${fromAddress}:${eventSelector}`;
             const specificHandlers = this.eventHandlers.get(specificHandlerKey) || [];
             handlerConfigs = [...specificHandlers];
           }
@@ -170,22 +175,18 @@ export class StarknetIndexer {
           handlerConfigs = [...handlerConfigs, ...generalHandlers];
           
           if (handlerConfigs.length > 0) {
-            // Get the cached ABI for this contract
             const abi = this.abiMapping.get(fromAddress);
             let parsedEvent = eventObj;
             
             if (abi) {
               try {
-                // Extract ABI components
                 const abiEvents = events.getAbiEvents(abi);
                 const abiStructs = CallData.getAbiStruct(abi);
                 const abiEnums = CallData.getAbiEnum(abi);
 
-                // Parse the event
                 const parsedEvents = events.parseEvents([eventObj], abiEvents, abiStructs, abiEnums);
                 
                 if (parsedEvents && parsedEvents.length > 0) {
-                  // Add raw event reference and original fields for convenience
                   const parsedEventWithOriginal = {
                     ...parsedEvents[0],
                     _rawEvent: eventObj,
@@ -208,7 +209,7 @@ export class StarknetIndexer {
               try {
                 await handler(parsedEvent, await this.pool.connect(), this);
               } catch (error) {
-                console.error(`Error processing historical event handler:`, error);
+                console.error(`Error processing event handler:`, error);
               }
             }
           }
@@ -307,26 +308,14 @@ export class StarknetIndexer {
     }
   }
   
-  // Register an event handler for a contract address with optional event key
-  public onEvent(fromAddress: string, handler: EventHandler): void;
-  public onEvent(fromAddress: string, eventKey: string, handler: EventHandler): void;
-  public onEvent(fromAddress: string, arg1: string | EventHandler, arg2?: EventHandler): void {
-    let eventKey: string | undefined;
-    let handler: EventHandler;
+  // Register an event handler for a contract address with optional event name
+  public onEvent(params: EventHandlerParams): void {
+    const { contractAddress, eventName, handler } = params;
 
-    if (typeof arg2 === 'function') {
-      // Format: (address, eventKey, handler)
-      eventKey = arg1 as string;
-      handler = arg2;
-    } else {
-      // Format: (address, handler)
-      handler = arg1 as EventHandler;
-    }
-
-    // Normalize address to lowercase
-    const normalizedAddress = validateAndParseAddress(fromAddress).toLowerCase();
+    // Validate and normalize the contract address
+    const normalizedAddress = validateAndParseAddress(contractAddress).toLowerCase();
     
-    // Add to contract addresses set
+    // Add to contract addresses set for filtering
     this.contractAddresses.add(normalizedAddress);
     
     // Create handler config
@@ -334,13 +323,19 @@ export class StarknetIndexer {
       handler
     };
     
-    const key = eventKey ? `${normalizedAddress}:${eventKey}` : normalizedAddress;
-    console.log(`Registering handler for key: ${key}`);
+    // Create the handler key using event selector if eventName is provided
+    const handlerKey = eventName 
+      ? `${normalizedAddress}:${this.getEventSelector(eventName)}` 
+      : normalizedAddress;
     
-    if (!this.eventHandlers.has(key)) {
-      this.eventHandlers.set(key, []);
+    // Initialize the handlers array if it doesn't exist
+    if (!this.eventHandlers.has(handlerKey)) {
+      this.eventHandlers.set(handlerKey, []);
     }
-    this.eventHandlers.get(key)?.push(handlerConfig);
+    
+    // Add the handler to the array
+    const handlers = this.eventHandlers.get(handlerKey)!;
+    handlers.push(handlerConfig);
 
     // Fetch and cache the ABI for this contract
     this.getContractABI(normalizedAddress).catch(error => {
@@ -359,22 +354,25 @@ export class StarknetIndexer {
     // Connect to WebSocket first
     try {
       await this.wsChannel.waitForConnection();
-      console.log('WebSocket connection established');
     } catch (error) {
       console.error('Failed to establish WebSocket connection:', error);
       throw error;
     }
     
-    // Fetch historical events if needed
-    const shouldFetchHistorical = targetBlock < currentBlock && 
-      (this.config.fetchHistoricalEvents !== false) && 
-      this.provider;
-
-    if (shouldFetchHistorical && this.provider) {
-      console.log(`Fetching historical blocks from ${targetBlock} to ${currentBlock}...`);
+    // Subscribe to new heads immediately
+    try {
+      await this.wsChannel.subscribeNewHeads();
+      this.started = true;
+    } catch (error) {
+      console.error('Failed to subscribe to new heads:', error);
+      throw error;
+    }
+    
+    // Process historical blocks if needed
+    if (targetBlock < currentBlock && this.provider) {
+      this.isProcessingBlocks = true;
+      
       try {
-        // First fetch and insert all blocks
-        console.log('Fetching historical blocks...');
         for (let blockNumber = targetBlock; blockNumber <= currentBlock; blockNumber++) {
           try {
             const block = await this.provider.getBlock(blockNumber);
@@ -386,27 +384,19 @@ export class StarknetIndexer {
                 timestamp: block.timestamp
               });
               
-              // Process transactions in this block
               await this.processBlockTransactions(blockNumber);
             }
           } catch (error) {
             console.error(`Error fetching block ${blockNumber}:`, error);
           }
         }
-        console.log('Historical blocks fetched and processed');
       } catch (error) {
-        console.warn('Failed to fetch historical events:', error);
+        console.warn('Failed to fetch historical blocks:', error);
       }
-    }
-    
-    // Subscribe to new heads
-    try {
-      await this.wsChannel.subscribeNewHeads();
-      this.started = true;
-      console.log('Indexer started successfully and subscribed to new blocks');
-    } catch (error) {
-      console.error('Failed to subscribe to new heads:', error);
-      throw error;
+      
+      // Process any queued blocks
+      this.isProcessingBlocks = false;
+      await this.processBlockQueue();
     }
   }
   
@@ -460,12 +450,6 @@ export class StarknetIndexer {
       
       await client.query('COMMIT');
       console.log(`Successfully processed block #${blockData.block_number}`);
-      
-      // After block is added, schedule queue processing
-      if (this.eventQueue.length > 0) {
-        console.log(`Block ${blockData.block_number} added, scheduling processing of ${this.eventQueue.length} queued events`);
-        setImmediate(() => this.processEventQueue());
-      }
     } catch (error) {
       await client.query('ROLLBACK');
       console.error('Failed to process block:', error);
@@ -544,118 +528,21 @@ export class StarknetIndexer {
     console.log('Indexer stopped');
   }
 
-  private async processEventQueue(): Promise<void> {
-    if (this.isProcessingQueue || this.eventQueue.length === 0) {
-      return;
-    }
-
-    this.isProcessingQueue = true;
-    const client = await this.pool.connect();
-
-    try {
-      const eventsToProcess = [...this.eventQueue];
-      this.eventQueue = []; // Clear the queue before processing
-
-      console.log(`Processing ${eventsToProcess.length} events from queue`);
-
-      while (eventsToProcess.length > 0) {
-        const batch = eventsToProcess.splice(0, this.maxConcurrentEvents);
-        
-        await client.query('BEGIN');
-
-        try {
-          for (const { event, handlers } of batch) {
-            // First, ensure the block exists
-            const blockResult = await client.query(
-              'SELECT 1 FROM blocks WHERE number = $1',
-              [event.block_number]
-            );
-
-            if (blockResult.rows.length === 0) {
-              // Block doesn't exist yet, put the event back in the queue
-              this.eventQueue.push({
-                event,
-                handlers,
-                timestamp: Date.now()
-              });
-              continue;
-            }
-
-            // Get the cached ABI for this contract
-            const abi = this.abiMapping.get(event.from_address);
-            let parsedEvent = event;
-            
-            if (abi) {
-              try {
-                // Extract ABI components
-                const abiEvents = events.getAbiEvents(abi);
-                const abiStructs = CallData.getAbiStruct(abi);
-                const abiEnums = CallData.getAbiEnum(abi);
-
-                // Parse the event
-                const parsedEvents = events.parseEvents([event], abiEvents, abiStructs, abiEnums);
-                
-                if (parsedEvents && parsedEvents.length > 0) {
-                  // Add raw event reference and original fields for convenience
-                  const parsedEventWithOriginal = {
-                    ...parsedEvents[0],
-                    _rawEvent: event,
-                    block_number: event.block_number,
-                    block_hash: event.block_hash,
-                    transaction_hash: event.transaction_hash,
-                    from_address: event.from_address,
-                    event_index: event.event_index,
-                    keys: event.keys,
-                    data: event.data
-                  };
-                  parsedEvent = parsedEventWithOriginal;
-                }
-              } catch (error) {
-                console.error(`Error parsing event:`, error);
-              }
-            }
-
-            // Process all handlers for the event
-            for (const { handler } of handlers) {
-              try {
-                await handler(parsedEvent, client, this);
-              } catch (error) {
-                console.error(`Error processing event handler:`, error);
-                // Continue with other handlers even if one fails
-              }
-            }
-          }
-
-          await client.query('COMMIT');
-        } catch (error) {
-          await client.query('ROLLBACK');
-          console.error(`Error processing event batch:`, error);
-          // Put the failed batch back in the queue
-          this.eventQueue.push(...batch);
-        }
-      }
-    } finally {
-      client.release();
-      this.isProcessingQueue = false;
-      
-      // If there are still events in the queue, schedule next processing
-      if (this.eventQueue.length > 0) {
-        console.log(`${this.eventQueue.length} events still in queue, scheduling next processing`);
-        setTimeout(() => this.processEventQueue(), 1000); // Wait 1 second before retrying
-      }
-    }
-  }
-
-  private enqueueEvent(event: any, handlerConfigs: EventHandlerConfig[]): void {
-    this.eventQueue.push({
-      event,
-      handlers: handlerConfigs,
-      timestamp: Date.now()
-    });
+  private async processBlockQueue(): Promise<void> {
+    if (this.blockQueue.length === 0) return;
     
-    // Start processing if not already processing
-    if (!this.isProcessingQueue) {
-      setImmediate(() => this.processEventQueue());
+    const blocksToProcess = [...this.blockQueue];
+    this.blockQueue = [];
+    
+    for (const block of blocksToProcess) {
+      try {
+        await this.processNewHead(block);
+        if (this.provider) {
+          await this.processBlockTransactions(block.block_number);
+        }
+      } catch (error) {
+        console.error(`Error processing queued block ${block.block_number}:`, error);
+      }
     }
   }
 }

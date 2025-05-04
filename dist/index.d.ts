@@ -4,11 +4,14 @@ export interface IndexerConfig {
     rpcNodeUrl?: string | undefined;
     databaseUrl: string;
     startingBlockNumber?: number;
-    fetchHistoricalEvents?: boolean;
-    maxConcurrentEvents?: number;
     contractAddresses?: string[];
 }
 export type EventHandler = (event: any, client: PoolClient, indexer: StarknetIndexer) => Promise<void>;
+interface EventHandlerParams {
+    contractAddress: string;
+    eventName?: string;
+    handler: EventHandler;
+}
 export declare class StarknetIndexer {
     private config;
     private wsChannel;
@@ -16,23 +19,21 @@ export declare class StarknetIndexer {
     private eventHandlers;
     private started;
     private provider?;
-    private eventQueue;
-    private isProcessingQueue;
-    private maxConcurrentEvents;
+    private blockQueue;
+    private isProcessingBlocks;
     private contractAddresses;
     private abiMapping;
     constructor(config: IndexerConfig);
     private setupEventHandlers;
+    private getEventSelector;
     private processBlockTransactions;
     initializeDatabase(): Promise<number | undefined>;
     private getContractABI;
-    onEvent(fromAddress: string, handler: EventHandler): void;
-    onEvent(fromAddress: string, eventKey: string, handler: EventHandler): void;
+    onEvent(params: EventHandlerParams): void;
     start(): Promise<void>;
     private processNewHead;
-    private processEvent;
     handleReorg(forkBlockNumber: number): Promise<void>;
     stop(): Promise<void>;
-    private processEventQueue;
-    private enqueueEvent;
+    private processBlockQueue;
 }
+export {};
