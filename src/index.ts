@@ -427,30 +427,25 @@ export class StarknetIndexer {
       this.isProcessingBlocks = true;
       
       try {
-        const BATCH_SIZE = 10;
-        for (let blockNumber = targetBlock; blockNumber <= currentBlock; blockNumber += BATCH_SIZE) {
-          const endBlock = Math.min(blockNumber + BATCH_SIZE - 1, currentBlock);
-          console.log(`[Indexer] Processing blocks ${blockNumber} to ${endBlock}`);
-          
-          for (let i = blockNumber; i <= endBlock; i++) {
-            if (this.cursor && i <= this.cursor.blockNumber) {
-              console.log(`[Block] Skipping block #${i} - already processed`);
-              continue;
-            }
+        for (let blockNumber = targetBlock; blockNumber <= currentBlock; blockNumber++) {
+          // Skip if already processed
+          if (this.cursor && blockNumber <= this.cursor.blockNumber) {
+            console.log(`[Block] Skipping block #${blockNumber} - already processed`);
+            continue;
+          }
 
-            try {
-              const block = await this.provider.getBlock(i);
-              if (block) {
-                await this.processNewHead({
-                  block_number: i,
-                  block_hash: block.block_hash,
-                  parent_hash: block.parent_hash,
-                  timestamp: block.timestamp
-                });
-              }
-            } catch (error) {
-              console.error(`[Block] Error fetching block ${i}:`, error);
+          try {
+            const block = await this.provider.getBlock(blockNumber);
+            if (block) {
+              await this.processNewHead({
+                block_number: blockNumber,
+                block_hash: block.block_hash,
+                parent_hash: block.parent_hash,
+                timestamp: block.timestamp
+              });
             }
+          } catch (error) {
+            console.error(`[Block] Error fetching block ${blockNumber}:`, error);
           }
         }
       } catch (error) {
