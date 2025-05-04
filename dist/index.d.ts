@@ -5,6 +5,7 @@ export interface IndexerConfig {
     databaseUrl: string;
     startingBlockNumber?: number;
     contractAddresses?: string[];
+    cursorKey?: string;
 }
 export type EventHandler = (event: any, client: PoolClient, indexer: StarknetIndexer) => Promise<void>;
 interface EventHandlerParams {
@@ -23,6 +24,7 @@ export declare class StarknetIndexer {
     private isProcessingBlocks;
     private contractAddresses;
     private abiMapping;
+    private cursor;
     constructor(config: IndexerConfig);
     private setupEventHandlers;
     private getEventSelector;
@@ -36,5 +38,6 @@ export declare class StarknetIndexer {
     handleReorg(forkBlockNumber: number): Promise<void>;
     stop(): Promise<void>;
     private processBlockQueue;
+    private updateCursor;
 }
 export {};

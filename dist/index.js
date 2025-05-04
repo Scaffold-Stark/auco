@@ -12,6 +12,7 @@ class StarknetIndexer {
         this.isProcessingBlocks = false;
         this.contractAddresses = new Set();
         this.abiMapping = new Map();
+        this.cursor = null;
         this.pool = new pg_1.Pool({
             connectionString: config.databaseUrl
         });
@@ -47,10 +48,12 @@ class StarknetIndexer {
                     this.blockQueue.push(blockData);
                 }
                 else {
-                    console.log(`[Block] Processing new block #${blockData.block_number}`);
-                    await this.processNewHead(blockData);
-                    if (this.provider) {
-                        await this.processBlockTransactions(blockData.block_number);
+                    if (!this.cursor || blockData.block_number > this.cursor.blockNumber) {
+                        console.log(`[Block] Processing new block #${blockData.block_number}`);
+                        await this.processNewHead(blockData);
+                    }
+                    else {
+                        console.log(`[Block] Skipping block #${blockData.block_number} - already processed`);
                     }
                 }
             }
@@ -201,10 +204,8 @@ class StarknetIndexer {
     }
     // Initialize the database schema
     async initializeDatabase() {
-        console.log('Initializing database schema...');
         const client = await this.pool.connect();
         try {
-            // Create tables if they don't exist
             await client.query(`
         CREATE TABLE IF NOT EXISTS blocks (
           number BIGINT PRIMARY KEY,
@@ -230,29 +231,34 @@ class StarknetIndexer {
           id INTEGER PRIMARY KEY DEFAULT 1,
           last_block_number BIGINT,
           last_block_hash TEXT,
+          cursor_key TEXT,
           CONSTRAINT singleton CHECK (id = 1)
         );
         
         CREATE INDEX IF NOT EXISTS idx_events_block ON events(block_number);
         CREATE INDEX IF NOT EXISTS idx_events_from ON events(from_address);
       `);
-            // Get the last indexed block number
             const result = await client.query(`
-        SELECT last_block_number FROM indexer_state WHERE id = 1
-      `);
-            let startingBlock;
+        SELECT last_block_number, last_block_hash 
+        FROM indexer_state 
+        WHERE id = 1 AND (cursor_key IS NULL OR cursor_key = $1)
+      `, [this.config.cursorKey || null]);
             if (result.rows.length === 0) {
-                // Initialize with starting block if specified
-                startingBlock = this.config.startingBlockNumber || 0;
+                const startingBlock = this.config.startingBlockNumber || 0;
+                this.cursor = { blockNumber: startingBlock, blockHash: '' };
                 await client.query(`
-          INSERT INTO indexer_state (last_block_number) VALUES ($1)
-        `, [startingBlock]);
+          INSERT INTO indexer_state (last_block_number, last_block_hash, cursor_key) 
+          VALUES ($1, $2, $3)
+        `, [startingBlock, '', this.config.cursorKey || null]);
+                return startingBlock;
             }
             else {
-                startingBlock = result.rows[0].last_block_number;
+                this.cursor = {
+                    blockNumber: result.rows[0].last_block_number,
+                    blockHash: result.rows[0].last_block_hash
+                };
+                return this.cursor.blockNumber;
             }
-            console.log(`Database schema initialized. Starting from block ${startingBlock}`);
-            return startingBlock;
         }
         finally {
             client.release();
@@ -318,7 +324,7 @@ class StarknetIndexer {
     // Start the indexer
     async start() {
         const startingBlock = await this.initializeDatabase() || 0;
-        console.log(`[Indexer] Starting from block ${startingBlock}`);
+        console.log(`[Indexer] Starting from block ${this.cursor?.blockNumber}`);
         const currentBlock = this.provider ? await this.provider.getBlockNumber() : 0;
         const targetBlock = this.config.startingBlockNumber || 0;
         try {
@@ -344,22 +350,29 @@ class StarknetIndexer {
             console.log(`[Indexer] Processing historical blocks from ${targetBlock} to ${currentBlock}`);
             this.isProcessingBlocks = true;
             try {
-                for (let blockNumber = targetBlock; blockNumber <= currentBlock; blockNumber++) {
-                    try {
-                        const block = await this.provider.getBlock(blockNumber);
-                        if (block) {
-                            console.log(`[Block] Processing historical block #${blockNumber}`);
-                            await this.processNewHead({
-                                block_number: blockNumber,
-                                block_hash: block.block_hash,
-                                parent_hash: block.parent_hash,
-                                timestamp: block.timestamp
-                            });
-                            await this.processBlockTransactions(blockNumber);
+                const BATCH_SIZE = 10;
+                for (let blockNumber = targetBlock; blockNumber <= currentBlock; blockNumber += BATCH_SIZE) {
+                    const endBlock = Math.min(blockNumber + BATCH_SIZE - 1, currentBlock);
+                    console.log(`[Indexer] Processing blocks ${blockNumber} to ${endBlock}`);
+                    for (let i = blockNumber; i <= endBlock; i++) {
+                        if (this.cursor && i <= this.cursor.blockNumber) {
+                            console.log(`[Block] Skipping block #${i} - already processed`);
+                            continue;
                         }
-                    }
-                    catch (error) {
-                        console.error(`[Block] Error fetching block ${blockNumber}:`, error);
+                        try {
+                            const block = await this.provider.getBlock(i);
+                            if (block) {
+                                await this.processNewHead({
+                                    block_number: i,
+                                    block_hash: block.block_hash,
+                                    parent_hash: block.parent_hash,
+                                    timestamp: block.timestamp
+                                });
+                            }
+                        }
+                        catch (error) {
+                            console.error(`[Block] Error fetching block ${i}:`, error);
+                        }
                     }
                 }
             }
@@ -373,51 +386,49 @@ class StarknetIndexer {
     }
     // Process a new block head
     async processNewHead(blockData) {
-        console.log(`Processing block #${blockData.block_number}, hash: ${blockData.block_hash}`);
+        if (this.cursor && blockData.block_number <= this.cursor.blockNumber) {
+            if (blockData.block_number === this.cursor.blockNumber &&
+                blockData.block_hash !== this.cursor.blockHash) {
+                console.log(`[Reorg] Detected reorg at block #${blockData.block_number}`);
+                await this.handleReorg(blockData.block_number);
+            }
+            else {
+                console.log(`[Block] Skipping block #${blockData.block_number} - already processed`);
+                return;
+            }
+        }
         const client = await this.pool.connect();
         try {
             await client.query('BEGIN');
-            // Convert timestamp to a valid format
             let timestamp;
             if (typeof blockData.timestamp === 'number') {
-                timestamp = blockData.timestamp * 1000; // Convert to milliseconds if in seconds
+                timestamp = blockData.timestamp * 1000;
             }
             else {
-                // Try to parse it if it's a string
                 timestamp = new Date(blockData.timestamp).getTime();
             }
-            // Check if block already exists
-            const existingBlock = await client.query('SELECT 1 FROM blocks WHERE number = $1', [blockData.block_number]);
-            if (existingBlock.rows.length === 0) {
-                console.log(`Inserting new block #${blockData.block_number}`);
-                // Insert the block
-                await client.query(`
-          INSERT INTO blocks (number, hash, parent_hash, timestamp)
-          VALUES ($1, $2, $3, $4)
-          ON CONFLICT (number) DO UPDATE
-          SET hash = $2, parent_hash = $3, timestamp = $4, is_canonical = TRUE
-        `, [
-                    blockData.block_number,
-                    blockData.block_hash,
-                    blockData.parent_hash,
-                    timestamp
-                ]);
-            }
-            else {
-                console.log(`Block #${blockData.block_number} already exists`);
-            }
-            // Update indexer state
             await client.query(`
-        UPDATE indexer_state 
-        SET last_block_number = $1, last_block_hash = $2
-        WHERE id = 1
-      `, [blockData.block_number, blockData.block_hash]);
+        INSERT INTO blocks (number, hash, parent_hash, timestamp)
+        VALUES ($1, $2, $3, $4)
+        ON CONFLICT (number) DO UPDATE
+        SET hash = $2, parent_hash = $3, timestamp = $4, is_canonical = TRUE
+      `, [
+                blockData.block_number,
+                blockData.block_hash,
+                blockData.parent_hash,
+                timestamp
+            ]);
+            await this.updateCursor(blockData.block_number, blockData.block_hash, client);
             await client.query('COMMIT');
-            console.log(`Successfully processed block #${blockData.block_number}`);
+            console.log(`[Block] Successfully processed block #${blockData.block_number}`);
+            if (this.provider) {
+                await this.processBlockTransactions(blockData.block_number);
+            }
         }
         catch (error) {
             await client.query('ROLLBACK');
-            console.error('Failed to process block:', error);
+            console.error(`[Block] Failed to process block #${blockData.block_number}:`, error);
+            throw error;
         }
         finally {
             client.release();
@@ -425,27 +436,24 @@ class StarknetIndexer {
     }
     // Handle chain reorgs
     async handleReorg(forkBlockNumber) {
-        console.log(`Handling reorg from block #${forkBlockNumber}`);
+        console.log(`[Reorg] Handling reorg from block #${forkBlockNumber}`);
         const client = await this.pool.connect();
         try {
             await client.query('BEGIN');
-            // Mark affected blocks as non-canonical
             await client.query(`
         UPDATE blocks
         SET is_canonical = FALSE
         WHERE number >= $1
       `, [forkBlockNumber]);
-            // Update indexer state if needed
-            await client.query(`
-        UPDATE indexer_state
-        SET last_block_number = $1
-        WHERE id = 1 AND last_block_number >= $1
-      `, [forkBlockNumber - 1]);
+            if (this.cursor && this.cursor.blockNumber >= forkBlockNumber) {
+                await this.updateCursor(forkBlockNumber - 1, '', client);
+            }
             await client.query('COMMIT');
+            console.log(`[Reorg] Successfully handled reorg from block #${forkBlockNumber}`);
         }
         catch (error) {
             await client.query('ROLLBACK');
-            console.error('Failed to handle reorg:', error);
+            console.error(`[Reorg] Failed to handle reorg from block #${forkBlockNumber}:`, error);
         }
         finally {
             client.release();
@@ -508,6 +516,14 @@ class StarknetIndexer {
                 console.error(`[Block] Error processing queued block ${block.block_number}:`, error);
             }
         }
+    }
+    async updateCursor(blockNumber, blockHash, client) {
+        this.cursor = { blockNumber, blockHash };
+        await client.query(`
+      UPDATE indexer_state 
+      SET last_block_number = $1, last_block_hash = $2
+      WHERE id = 1 AND (cursor_key IS NULL OR cursor_key = $3)
+    `, [blockNumber, blockHash, this.config.cursorKey || null]);
     }
 }
 exports.StarknetIndexer = StarknetIndexer;
