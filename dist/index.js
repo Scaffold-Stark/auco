@@ -10,6 +10,7 @@ class StarknetIndexer {
         this.started = false;
         this.eventQueue = [];
         this.isProcessingQueue = false;
+        this.contractAddresses = new Set();
         this.pool = new pg_1.Pool({
             connectionString: config.databaseUrl
         });
@@ -17,6 +18,11 @@ class StarknetIndexer {
             nodeUrl: config.wsNodeUrl
         });
         this.maxConcurrentEvents = config.maxConcurrentEvents || 5;
+        if (config.contractAddresses) {
+            config.contractAddresses.forEach(address => {
+                this.contractAddresses.add((0, starknet_1.validateAndParseAddress)(address).toLowerCase());
+            });
+        }
         if (config.rpcNodeUrl) {
             try {
                 this.provider = new starknet_1.RpcProvider({ nodeUrl: config.rpcNodeUrl, specVersion: '0.8' });
@@ -30,30 +36,23 @@ class StarknetIndexer {
     setupEventHandlers() {
         // Handle new block heads
         this.wsChannel.onNewHeads = async (data) => {
-            console.log('New block received:', data);
+            console.log('New block received:', data.result.block_number);
             try {
-                await this.processNewHead(data.result);
+                const blockNumber = data.result.block_number;
+                // Store block data
+                await this.processNewHead({
+                    block_number: blockNumber,
+                    block_hash: data.result.block_hash,
+                    parent_hash: data.result.parent_hash,
+                    timestamp: data.result.timestamp
+                });
+                // If we have a provider, fetch the block with receipts to get the transactions
+                if (this.provider) {
+                    await this.processBlockTransactions(blockNumber);
+                }
             }
             catch (error) {
                 console.error('Error processing new head:', error);
-            }
-        };
-        // Handle events
-        this.wsChannel.onEvents = async (data) => {
-            console.log('Events received:', data);
-            try {
-                // Process each event in the data array
-                if (Array.isArray(data.result)) {
-                    for (const event of data.result) {
-                        await this.processEvents(event);
-                    }
-                }
-                else {
-                    await this.processEvents(data.result);
-                }
-            }
-            catch (error) {
-                console.error('Error processing events:', error);
             }
         };
         // Handle reorgs
@@ -77,15 +76,58 @@ class StarknetIndexer {
                 console.log('Attempting to reconnect...');
                 try {
                     await this.wsChannel.reconnect();
-                    // After reconnection, resubscribe to events
-                    await this.subscribeToEvents();
-                    console.log('Successfully reconnected and resubscribed to events');
+                    // After reconnection, resubscribe to new heads
+                    await this.wsChannel.subscribeNewHeads();
+                    console.log('Successfully reconnected and resubscribed to new heads');
                 }
                 catch (error) {
                     console.error('Failed to reconnect:', error);
                 }
             }
         };
+    }
+    // Process block transactions and extract events
+    async processBlockTransactions(blockNumber) {
+        if (!this.provider)
+            return;
+        try {
+            console.log(`Fetching block ${blockNumber} with receipts`);
+            const blockWithReceipts = await this.provider.getBlockWithReceipts(blockNumber);
+            if (!blockWithReceipts || !blockWithReceipts.transactions) {
+                console.log(`No transactions found in block ${blockNumber}`);
+                return;
+            }
+            console.log(`Processing ${blockWithReceipts.transactions.length} transactions in block ${blockNumber}`);
+            // Process each transaction's events
+            for (const txWithReceipt of blockWithReceipts.transactions) {
+                const receipt = txWithReceipt.receipt;
+                if (!receipt.events || receipt.events.length === 0)
+                    continue;
+                // Process each event in the transaction
+                for (let eventIndex = 0; eventIndex < receipt.events.length; eventIndex++) {
+                    const event = receipt.events[eventIndex];
+                    const fromAddress = (0, starknet_1.validateAndParseAddress)(event.from_address).toLowerCase();
+                    if (this.contractAddresses.size > 0 && !this.contractAddresses.has(fromAddress)) {
+                        continue;
+                    }
+                    // Create a standardized event object
+                    const eventObj = {
+                        block_number: blockNumber,
+                        transaction_hash: receipt.transaction_hash,
+                        from_address: fromAddress,
+                        event_index: eventIndex,
+                        keys: event.keys,
+                        data: event.data
+                    };
+                    console.log("eventObj", eventObj);
+                    // Find handlers for this event
+                    await this.processEvent(eventObj);
+                }
+            }
+        }
+        catch (error) {
+            console.error(`Error processing block ${blockNumber} transactions:`, error);
+        }
     }
     // Initialize the database schema
     async initializeDatabase() {
@@ -158,6 +200,8 @@ class StarknetIndexer {
         }
         // Normalize address to lowercase
         const normalizedAddress = (0, starknet_1.validateAndParseAddress)(fromAddress).toLowerCase();
+        // Add to contract addresses set
+        this.contractAddresses.add(normalizedAddress);
         const key = eventKey ? `${normalizedAddress}:${eventKey}` : normalizedAddress;
         console.log(`Registering handler for key: ${key}`);
         if (!this.eventHandlers.has(key)) {
@@ -185,21 +229,12 @@ class StarknetIndexer {
             console.error('Failed to establish WebSocket connection:', error);
             throw error;
         }
-        // Subscribe to events before fetching historical data
-        try {
-            await this.subscribeToEvents();
-            console.log('Successfully subscribed to events');
-        }
-        catch (error) {
-            console.error('Failed to subscribe to events:', error);
-            throw error;
-        }
         // Fetch historical events if needed
         const shouldFetchHistorical = targetBlock < currentBlock &&
             (this.config.fetchHistoricalEvents !== false) &&
             this.provider;
         if (shouldFetchHistorical && this.provider) {
-            console.log(`Fetching historical events from block ${targetBlock} to ${currentBlock}...`);
+            console.log(`Fetching historical blocks from ${targetBlock} to ${currentBlock}...`);
             try {
                 // First fetch and insert all blocks
                 console.log('Fetching historical blocks...');
@@ -213,57 +248,29 @@ class StarknetIndexer {
                                 parent_hash: block.parent_hash,
                                 timestamp: block.timestamp
                             });
+                            // Process transactions in this block
+                            await this.processBlockTransactions(blockNumber);
                         }
                     }
                     catch (error) {
                         console.error(`Error fetching block ${blockNumber}:`, error);
                     }
                 }
-                console.log('Historical blocks fetched and inserted');
-                // Then fetch and process historical events
-                await this.fetchHistoricalEvents(targetBlock, currentBlock);
-                console.log('Historical events fetched successfully');
+                console.log('Historical blocks fetched and processed');
             }
             catch (error) {
                 console.warn('Failed to fetch historical events:', error);
             }
         }
+        // Subscribe to new heads
         try {
             await this.wsChannel.subscribeNewHeads();
             this.started = true;
-            console.log('Indexer started successfully');
+            console.log('Indexer started successfully and subscribed to new blocks');
         }
         catch (error) {
             console.error('Failed to subscribe to new heads:', error);
             throw error;
-        }
-    }
-    // Subscribe to events based on registered handlers
-    async subscribeToEvents() {
-        // Track addresses we've already subscribed to
-        const subscribedAddresses = new Set();
-        for (const key of this.eventHandlers.keys()) {
-            const [address, eventKey] = key.includes(':') ? key.split(':') : [key, undefined];
-            // Skip if we've already subscribed to all events for this address
-            if (subscribedAddresses.has(address))
-                continue;
-            try {
-                if (eventKey) {
-                    // Subscribe to specific event key
-                    const subId = await this.wsChannel.subscribeEventsUnmanaged(address, [[eventKey]]);
-                    console.log(`Subscribed to events from ${address} with key ${eventKey}, ID:`, subId);
-                }
-                else {
-                    // Subscribe to all events from this address
-                    const subId = await this.wsChannel.subscribeEventsUnmanaged(address);
-                    console.log(`Subscribed to all events from ${address} with ID:`, subId);
-                    subscribedAddresses.add(address);
-                }
-            }
-            catch (error) {
-                console.error(`Error subscribing to events for address ${address}:`, error);
-                // Continue with other subscriptions
-            }
         }
     }
     // Process a new block head
@@ -323,18 +330,26 @@ class StarknetIndexer {
             client.release();
         }
     }
-    // Process events
-    async processEvents(data) {
-        const event = data;
+    // Process a single event
+    async processEvent(event) {
         const blockNumber = event.block_number;
         if (!blockNumber) {
             console.error('Invalid event data structure:', event);
             return;
         }
         // Get handlers for this address
-        const normalizedAddress = (0, starknet_1.validateAndParseAddress)(event.from_address).toLowerCase();
-        const addressHandlerKey = `${normalizedAddress}:${event.keys[0]}`;
-        const handlers = this.eventHandlers.get(addressHandlerKey) || [];
+        const normalizedAddress = event.from_address.toLowerCase();
+        let handlers = [];
+        // Check for handlers for this address (with or without event key)
+        if (event.keys && event.keys.length > 0) {
+            const eventKey = event.keys[0];
+            const specificHandlerKey = `${normalizedAddress}:${eventKey}`;
+            const specificHandlers = this.eventHandlers.get(specificHandlerKey) || [];
+            handlers = [...specificHandlers];
+        }
+        // Also get general handlers for this address
+        const generalHandlers = this.eventHandlers.get(normalizedAddress) || [];
+        handlers = [...handlers, ...generalHandlers];
         if (handlers.length > 0) {
             console.log(`Found ${handlers.length} handlers for event from ${event.from_address}, enqueueing`);
             this.enqueueEvent(event, handlers);
@@ -382,16 +397,12 @@ class StarknetIndexer {
                     if (type === 'newHeads') {
                         await this.wsChannel.unsubscribeNewHeads();
                     }
-                    else if (type === 'events') {
-                        await this.wsChannel.unsubscribeEvents();
-                    }
                     else {
                         await this.wsChannel.unsubscribe(subId);
                     }
                 }
                 catch (error) {
                     console.error(`Error unsubscribing from ${type}:`, error);
-                    // Continue with other unsubscriptions even if one fails
                 }
             }
         }
@@ -480,29 +491,6 @@ class StarknetIndexer {
         // Start processing if not already processing
         if (!this.isProcessingQueue) {
             setImmediate(() => this.processEventQueue());
-        }
-    }
-    async fetchHistoricalEvents(fromBlock, toBlock) {
-        if (!this.provider)
-            return;
-        console.log(`Starting historical event fetch from block ${fromBlock} to ${toBlock}`);
-        for (const [address, handlers] of this.eventHandlers.entries()) {
-            const [contractAddress, eventKey] = address.includes(':') ? address.split(':') : [address, undefined];
-            const keyFilter = eventKey ? [[eventKey]] : undefined;
-            console.log(`Fetching events for contract ${contractAddress}${eventKey ? ` with key ${eventKey}` : ''}`);
-            const response = await this.provider.getEvents({
-                address: contractAddress,
-                from_block: { block_number: fromBlock },
-                to_block: { block_number: toBlock },
-                keys: keyFilter,
-                chunk_size: 1000
-            });
-            if (response.events) {
-                console.log(`Found ${response.events.length} events for contract ${contractAddress}`);
-                for (const event of response.events) {
-                    this.enqueueEvent(event, handlers);
-                }
-            }
         }
     }
 }

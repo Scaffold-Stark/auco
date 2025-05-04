@@ -6,6 +6,7 @@ export interface IndexerConfig {
     startingBlockNumber?: number;
     fetchHistoricalEvents?: boolean;
     maxConcurrentEvents?: number;
+    contractAddresses?: string[];
 }
 export type EventHandler = (event: any, client: PoolClient) => Promise<void>;
 export declare class StarknetIndexer {
@@ -18,18 +19,18 @@ export declare class StarknetIndexer {
     private eventQueue;
     private isProcessingQueue;
     private maxConcurrentEvents;
+    private contractAddresses;
     constructor(config: IndexerConfig);
     private setupEventHandlers;
+    private processBlockTransactions;
     initializeDatabase(): Promise<number | undefined>;
     onEvent(fromAddress: string, handler: EventHandler): void;
     onEvent(fromAddress: string, eventKey: string, handler: EventHandler): void;
     start(): Promise<void>;
-    private subscribeToEvents;
     private processNewHead;
-    private processEvents;
+    private processEvent;
     handleReorg(forkBlockNumber: number): Promise<void>;
     stop(): Promise<void>;
     private processEventQueue;
     private enqueueEvent;
-    private fetchHistoricalEvents;
 }
