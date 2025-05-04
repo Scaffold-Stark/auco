@@ -297,6 +297,10 @@ export class StarknetIndexer {
                 const parsedEvents = events.parseEvents([eventObj], abiEvents, abiStructs, abiEnums);
                 
                 if (parsedEvents && parsedEvents.length > 0) {
+                  // Get the first key of the parsed event (the event name)
+                  const eventKey = Object.keys(parsedEvents[0])[0];
+                  const parsedValues = parsedEvents[0][eventKey];
+
                   const parsedEventWithOriginal = {
                     ...parsedEvents[0],
                     _rawEvent: eventObj,
@@ -306,9 +310,11 @@ export class StarknetIndexer {
                     from_address: fromAddress,
                     event_index: eventObj.event_index,
                     keys: eventObj.keys,
-                    data: eventObj.data
+                    data: eventObj.data,
+                    parsed: parsedValues // Add the parsed values directly
                   };
                   parsedEvent = parsedEventWithOriginal;
+                  this.logger.debug(`Parsed event values:`, parsedValues);
                 }
               } catch (error) {
                 this.logger.error(`Error parsing event from contract ${fromAddress}:`, error);
@@ -559,7 +565,99 @@ export class StarknetIndexer {
       this.logger.info(`Successfully processed block #${blockData.block_number}`);
 
       if (this.provider) {
-        await this.processBlockTransactions(blockData.block_number);
+        try {
+          const blockWithReceipts = await this.provider.getBlockWithReceipts(blockData.block_number);
+          
+          if (!blockWithReceipts || !blockWithReceipts.transactions) {
+            return;
+          }
+          
+          for (const txWithReceipt of blockWithReceipts.transactions) {
+            const receipt = txWithReceipt.receipt;
+            
+            if (!receipt.events || receipt.events.length === 0) continue;
+            
+            for (let eventIndex = 0; eventIndex < receipt.events.length; eventIndex++) {
+              const event = receipt.events[eventIndex];
+              const fromAddress = this.normalizeAddress(event.from_address);
+
+              if (this.contractAddresses.size > 0 && !this.contractAddresses.has(fromAddress)) {
+                continue;
+              }
+              
+              const eventObj = {
+                block_number: blockData.block_number,
+                block_hash: (blockWithReceipts as any).block_hash || '',
+                transaction_hash: receipt.transaction_hash,
+                from_address: fromAddress,
+                event_index: eventIndex,
+                keys: event.keys,
+                data: event.data
+              };
+
+              let handlerConfigs: EventHandlerConfig[] = [];
+              
+              if (event.keys && event.keys.length > 0) {
+                const eventSelector = event.keys[0];
+                const specificHandlerKey = `${fromAddress}:${eventSelector}`;
+                const specificHandlers = this.eventHandlers.get(specificHandlerKey) || [];
+                handlerConfigs = [...specificHandlers];
+              }
+              
+              const generalHandlers = this.eventHandlers.get(fromAddress) || [];
+              handlerConfigs = [...handlerConfigs, ...generalHandlers];
+              
+              if (handlerConfigs.length > 0) {
+                const abi = this.abiMapping.get(fromAddress);
+                let parsedEvent = eventObj;
+                
+                if (abi) {
+                  try {
+                    const abiEvents = events.getAbiEvents(abi);
+                    const abiStructs = CallData.getAbiStruct(abi);
+                    const abiEnums = CallData.getAbiEnum(abi);
+
+                    const parsedEvents = events.parseEvents([eventObj], abiEvents, abiStructs, abiEnums);
+                    
+                    if (parsedEvents && parsedEvents.length > 0) {
+                      // Get the first key of the parsed event (the event name)
+                      const eventKey = Object.keys(parsedEvents[0])[0];
+                      const parsedValues = parsedEvents[0][eventKey];
+
+                      const parsedEventWithOriginal = {
+                        block_number: eventObj.block_number,
+                        block_hash: eventObj.block_hash,
+                        transaction_hash: eventObj.transaction_hash,
+                        from_address: fromAddress,
+                        event_index: eventObj.event_index,
+                        keys: eventObj.keys,
+                        data: eventObj.data,
+                        parsed: parsedValues // Add the parsed values directly
+                      };
+                      parsedEvent = parsedEventWithOriginal;
+                      this.logger.debug(`Parsed event values:`, parsedValues);
+                    }
+                  } catch (error) {
+                    this.logger.error(`Error parsing event from contract ${fromAddress}:`, error);
+                    throw error; // Rethrow to trigger rollback
+                  }
+                }
+
+                for (const { handler } of handlerConfigs) {
+                  try {
+                    await handler(parsedEvent, client, this);
+                  } catch (error) {
+                    this.logger.error(`Error processing event handler for contract ${fromAddress}:`, error);
+                    throw error; // Rethrow to trigger rollback
+                  }
+                }
+              }
+            }
+          }
+        } catch (error) {
+          this.logger.error(`Error processing block ${blockData.block_number} transactions:`, error);
+          throw error; // Rethrow to trigger rollback
+        }
       }
     }, { blockNumber: blockData.block_number });
   }
