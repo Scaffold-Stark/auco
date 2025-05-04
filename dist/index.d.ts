@@ -26,10 +26,11 @@ export declare class StarknetIndexer {
     constructor(config: IndexerConfig);
     private setupEventHandlers;
     private getEventSelector;
+    private validateEventName;
     private processBlockTransactions;
     initializeDatabase(): Promise<number | undefined>;
     private getContractABI;
-    onEvent(params: EventHandlerParams): void;
+    onEvent(params: EventHandlerParams): Promise<void>;
     start(): Promise<void>;
     private processNewHead;
     handleReorg(forkBlockNumber: number): Promise<void>;

@@ -28,13 +28,12 @@ class StarknetIndexer {
                 this.provider = new starknet_1.RpcProvider({ nodeUrl: config.rpcNodeUrl, specVersion: '0.8' });
             }
             catch (error) {
-                console.warn('Failed to initialize RPC provider:', error);
+                console.error('Failed to initialize RPC provider:', error);
             }
         }
         this.setupEventHandlers();
     }
     setupEventHandlers() {
-        // Handle new block heads
         this.wsChannel.onNewHeads = async (data) => {
             try {
                 const blockData = {
@@ -43,12 +42,12 @@ class StarknetIndexer {
                     parent_hash: data.result.parent_hash,
                     timestamp: data.result.timestamp
                 };
-                // If we're processing historical blocks, queue the new block
                 if (this.isProcessingBlocks) {
+                    console.log(`[Block] Queuing block #${blockData.block_number} for later processing`);
                     this.blockQueue.push(blockData);
                 }
                 else {
-                    // Otherwise process it immediately
+                    console.log(`[Block] Processing new block #${blockData.block_number}`);
                     await this.processNewHead(blockData);
                     if (this.provider) {
                         await this.processBlockTransactions(blockData.block_number);
@@ -56,29 +55,29 @@ class StarknetIndexer {
                 }
             }
             catch (error) {
-                console.error('Error processing new head:', error);
+                console.error('[Block] Error processing new head:', error);
             }
         };
-        // Handle reorgs
         this.wsChannel.onReorg = async (data) => {
             const reorgPoint = data.result?.starting_block_number;
             if (reorgPoint) {
+                console.log(`[Reorg] Handling reorg from block #${reorgPoint}`);
                 await this.handleReorg(reorgPoint);
             }
         };
-        // Handle connection errors
         this.wsChannel.onError = (error) => {
-            console.error('WebSocket error:', error);
+            console.error('[WebSocket] Error:', error);
         };
-        // Handle connection closure
         this.wsChannel.onClose = async (event) => {
             if (this.started) {
+                console.log('[WebSocket] Connection closed, attempting to reconnect...');
                 try {
                     await this.wsChannel.reconnect();
                     await this.wsChannel.subscribeNewHeads();
+                    console.log('[WebSocket] Successfully reconnected');
                 }
                 catch (error) {
-                    console.error('Failed to reconnect:', error);
+                    console.error('[WebSocket] Failed to reconnect:', error);
                 }
             }
         };
@@ -91,6 +90,33 @@ class StarknetIndexer {
             throw new Error(`Invalid event name: ${eventName}`);
         }
         return starknet_1.hash.getSelectorFromName(cleanName);
+    }
+    async validateEventName(contractAddress, eventName) {
+        const abi = await this.getContractABI(contractAddress);
+        if (!abi) {
+            console.error(`[ABI] No ABI found for contract ${contractAddress}`);
+            return false;
+        }
+        for (const item of abi) {
+            if (item.type !== 'event')
+                continue;
+            const fullName = item.name;
+            const cleanEventName = fullName.split('::').pop() || '';
+            if (cleanEventName.toLowerCase() === eventName.toLowerCase()) {
+                console.log(`[Event] Found event "${eventName}" in contract ${contractAddress}`);
+                return true;
+            }
+            if (item.kind === 'enum' && Array.isArray(item.variants)) {
+                for (const variant of item.variants) {
+                    if (variant.name?.toLowerCase() === eventName.toLowerCase()) {
+                        console.log(`[Event] Found enum variant "${eventName}" in contract ${contractAddress}`);
+                        return true;
+                    }
+                }
+            }
+        }
+        console.error(`[Event] Event "${eventName}" not found in contract ${contractAddress} ABI`);
+        return false;
     }
     // Process block transactions and extract events
     async processBlockTransactions(blockNumber) {
@@ -154,7 +180,7 @@ class StarknetIndexer {
                                 }
                             }
                             catch (error) {
-                                console.error(`Error parsing event:`, error);
+                                console.error(`[Event] Error parsing event from contract ${fromAddress}:`, error);
                             }
                         }
                         for (const { handler } of handlerConfigs) {
@@ -162,7 +188,7 @@ class StarknetIndexer {
                                 await handler(parsedEvent, await this.pool.connect(), this);
                             }
                             catch (error) {
-                                console.error(`Error processing event handler:`, error);
+                                console.error(`[Event] Error processing event handler for contract ${fromAddress}:`, error);
                             }
                         }
                     }
@@ -170,7 +196,7 @@ class StarknetIndexer {
             }
         }
         catch (error) {
-            console.error(`Error processing block ${blockNumber} transactions:`, error);
+            console.error(`[Block] Error processing block ${blockNumber} transactions:`, error);
         }
     }
     // Initialize the database schema
@@ -235,84 +261,94 @@ class StarknetIndexer {
     // Get the ABI for a contract address and cache it
     async getContractABI(address) {
         if (!this.provider) {
-            console.warn('No RPC provider available to fetch ABI');
+            console.error('[ABI] No RPC provider available to fetch ABI');
             return undefined;
         }
         const normalizedAddress = (0, starknet_1.validateAndParseAddress)(address).toLowerCase();
-        // Return cached ABI if available
         if (this.abiMapping.has(normalizedAddress)) {
+            console.log(`[ABI] Using cached ABI for contract ${normalizedAddress}`);
             return this.abiMapping.get(normalizedAddress);
         }
         try {
             const contractClass = await this.provider.getClassAt(normalizedAddress);
             const abi = contractClass.abi;
             this.abiMapping.set(normalizedAddress, abi);
-            console.log(`Cached ABI for contract ${normalizedAddress}`);
+            console.log(`[ABI] Cached ABI for contract ${normalizedAddress}`);
             return abi;
         }
         catch (error) {
-            console.warn(`Failed to fetch ABI for contract ${normalizedAddress}:`, error);
+            console.error(`[ABI] Failed to fetch ABI for contract ${normalizedAddress}:`, error);
             return undefined;
         }
     }
     // Register an event handler for a contract address with optional event name
-    onEvent(params) {
+    async onEvent(params) {
         const { contractAddress, eventName, handler } = params;
-        // Validate and normalize the contract address
+        if (!contractAddress) {
+            throw new Error('Contract address is required');
+        }
+        if (!handler) {
+            throw new Error('Handler is required');
+        }
         const normalizedAddress = (0, starknet_1.validateAndParseAddress)(contractAddress).toLowerCase();
-        // Add to contract addresses set for filtering
+        console.log(`[Handler] Registering handler for contract ${normalizedAddress}${eventName ? `, event: ${eventName}` : ''}`);
         this.contractAddresses.add(normalizedAddress);
-        // Create handler config
         const handlerConfig = {
             handler
         };
-        // Create the handler key using event selector if eventName is provided
+        if (eventName) {
+            const isValid = await this.validateEventName(normalizedAddress, eventName);
+            if (!isValid) {
+                throw new Error(`[Event] Event "${eventName}" not found in contract ${normalizedAddress} ABI`);
+            }
+        }
         const handlerKey = eventName
             ? `${normalizedAddress}:${this.getEventSelector(eventName)}`
             : normalizedAddress;
-        // Initialize the handlers array if it doesn't exist
         if (!this.eventHandlers.has(handlerKey)) {
             this.eventHandlers.set(handlerKey, []);
         }
-        // Add the handler to the array
         const handlers = this.eventHandlers.get(handlerKey);
         handlers.push(handlerConfig);
-        // Fetch and cache the ABI for this contract
-        this.getContractABI(normalizedAddress).catch(error => {
-            console.error(`Failed to fetch ABI for contract ${normalizedAddress}:`, error);
+        console.log(`[Handler] Successfully registered handler for ${handlerKey}`);
+        await this.getContractABI(normalizedAddress).catch(error => {
+            console.error(`[ABI] Failed to fetch ABI for contract ${normalizedAddress}:`, error);
         });
     }
     // Start the indexer
     async start() {
         const startingBlock = await this.initializeDatabase() || 0;
-        // Get current block number if RPC is available
+        console.log(`[Indexer] Starting from block ${startingBlock}`);
         const currentBlock = this.provider ? await this.provider.getBlockNumber() : 0;
         const targetBlock = this.config.startingBlockNumber || 0;
-        // Connect to WebSocket first
         try {
+            console.log('[WebSocket] Connecting to node...');
             await this.wsChannel.waitForConnection();
+            console.log('[WebSocket] Successfully connected');
         }
         catch (error) {
-            console.error('Failed to establish WebSocket connection:', error);
+            console.error('[WebSocket] Failed to establish connection:', error);
             throw error;
         }
-        // Subscribe to new heads immediately
         try {
+            console.log('[WebSocket] Subscribing to new heads...');
             await this.wsChannel.subscribeNewHeads();
             this.started = true;
+            console.log('[WebSocket] Successfully subscribed to new heads');
         }
         catch (error) {
-            console.error('Failed to subscribe to new heads:', error);
+            console.error('[WebSocket] Failed to subscribe to new heads:', error);
             throw error;
         }
-        // Process historical blocks if needed
         if (targetBlock < currentBlock && this.provider) {
+            console.log(`[Indexer] Processing historical blocks from ${targetBlock} to ${currentBlock}`);
             this.isProcessingBlocks = true;
             try {
                 for (let blockNumber = targetBlock; blockNumber <= currentBlock; blockNumber++) {
                     try {
                         const block = await this.provider.getBlock(blockNumber);
                         if (block) {
+                            console.log(`[Block] Processing historical block #${blockNumber}`);
                             await this.processNewHead({
                                 block_number: blockNumber,
                                 block_hash: block.block_hash,
@@ -323,15 +359,15 @@ class StarknetIndexer {
                         }
                     }
                     catch (error) {
-                        console.error(`Error fetching block ${blockNumber}:`, error);
+                        console.error(`[Block] Error fetching block ${blockNumber}:`, error);
                     }
                 }
             }
             catch (error) {
-                console.warn('Failed to fetch historical blocks:', error);
+                console.error('[Indexer] Failed to fetch historical blocks:', error);
             }
-            // Process any queued blocks
             this.isProcessingBlocks = false;
+            console.log('[Indexer] Processing queued blocks...');
             await this.processBlockQueue();
         }
     }
@@ -459,15 +495,17 @@ class StarknetIndexer {
             return;
         const blocksToProcess = [...this.blockQueue];
         this.blockQueue = [];
+        console.log(`[Block] Processing ${blocksToProcess.length} queued blocks`);
         for (const block of blocksToProcess) {
             try {
+                console.log(`[Block] Processing queued block #${block.block_number}`);
                 await this.processNewHead(block);
                 if (this.provider) {
                     await this.processBlockTransactions(block.block_number);
                 }
             }
             catch (error) {
-                console.error(`Error processing queued block ${block.block_number}:`, error);
+                console.error(`[Block] Error processing queued block ${block.block_number}:`, error);
             }
         }
     }
