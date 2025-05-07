@@ -93,7 +93,7 @@ export class StarknetIndexer {
   private isProcessingBlocks: boolean = false;
   private contractAddresses: Set<string> = new Set();
   private abiMapping: Map<string, any> = new Map();
-  private cursor: Cursor | null = null;
+  private checkpoint: Cursor | null = null;
   private logger: Logger;
   
   constructor(private config: IndexerConfig) {
@@ -138,7 +138,7 @@ export class StarknetIndexer {
           this.logger.info(`Queuing block #${blockData.block_number} for later processing`);
           this.blockQueue.push(blockData);
         } else {
-          if (!this.cursor || blockData.block_number > this.cursor.blockNumber) {
+          if (!this.checkpoint || blockData.block_number > this.checkpoint.blockNumber) {
             this.logger.info(`Processing new block #${blockData.block_number}`);
             await this.processNewHead(blockData);
           } else {
@@ -242,6 +242,9 @@ export class StarknetIndexer {
   private async processBlockTransactions(blockNumber: number): Promise<void> {
     if (!this.provider) return;
     
+    const startTime = Date.now();
+    let eventsProcessed = 0;
+    
     try {
       const blockWithReceipts = await this.provider.getBlockWithReceipts(blockNumber);
       
@@ -324,6 +327,7 @@ export class StarknetIndexer {
             for (const { handler } of handlerConfigs) {
               try {
                 await handler(parsedEvent, await this.pool.connect(), this);
+                eventsProcessed++;
               } catch (error) {
                 this.logger.error(`Error processing event handler for contract ${fromAddress}:`, error);
               }
@@ -331,6 +335,20 @@ export class StarknetIndexer {
           }
         }
       }
+
+      // Log performance metrics
+      const metrics = {
+        blockNumber,
+        blockTimestamp: new Date().toISOString(),
+        durationMs: Date.now() - startTime,
+        eventsProcessed,
+        isHead: false, // This would need to be determined from the indexer state
+        lagMilliseconds: Date.now() - new Date(blockWithReceipts.timestamp * 1000).getTime(),
+        timestamp: new Date().toLocaleString()
+      };
+      
+      this.logger.info(JSON.stringify(metrics));
+      
     } catch (error) {
       this.logger.error(`Error processing block ${blockNumber} transactions:`, error);
     }
@@ -381,7 +399,7 @@ export class StarknetIndexer {
       
       if (result.rows.length === 0) {
         const startingBlock = this.config.startingBlockNumber || 0;
-        this.cursor = { blockNumber: startingBlock, blockHash: '' };
+        this.checkpoint = { blockNumber: startingBlock, blockHash: '' };
         
         await client.query(`
           INSERT INTO indexer_state (last_block_number, last_block_hash, cursor_key) 
@@ -390,11 +408,11 @@ export class StarknetIndexer {
         
         return startingBlock;
       } else {
-        this.cursor = { 
+        this.checkpoint = { 
           blockNumber: result.rows[0].last_block_number,
           blockHash: result.rows[0].last_block_hash 
         };
-        return this.cursor.blockNumber;
+        return this.checkpoint.blockNumber;
       }
     } finally {
       client.release();
@@ -467,8 +485,8 @@ export class StarknetIndexer {
   
   // Start the indexer
   public async start(): Promise<void> {
-    const startingBlock = await this.initializeDatabase() || 0;
-    this.logger.info(`Starting from block ${this.cursor?.blockNumber}`);
+    await this.initializeDatabase();
+    this.logger.info(`Starting from block ${this.checkpoint?.blockNumber}`);
     
     const currentBlock = this.provider ? await this.provider.getBlockNumber() : 0;
     const targetBlock = this.config.startingBlockNumber || 0;
@@ -499,7 +517,7 @@ export class StarknetIndexer {
       try {
         for (let blockNumber = targetBlock; blockNumber <= currentBlock; blockNumber++) {
           // Skip if already processed
-          if (this.cursor && blockNumber <= this.cursor.blockNumber) {
+          if (this.checkpoint && blockNumber <= this.checkpoint.blockNumber) {
             this.logger.debug(`Skipping block #${blockNumber} - already processed`);
             continue;
           }
@@ -530,9 +548,12 @@ export class StarknetIndexer {
   
   // Process a new block head
   private async processNewHead(blockData: any): Promise<void> {
-    if (this.cursor && blockData.block_number <= this.cursor.blockNumber) {
-      if (blockData.block_number === this.cursor.blockNumber && 
-          blockData.block_hash !== this.cursor.blockHash) {
+    const startTime = Date.now();
+    let eventsProcessed = 0;
+    
+    if (this.checkpoint && blockData.block_number <= this.checkpoint.blockNumber) {
+      if (blockData.block_number === this.checkpoint.blockNumber && 
+          blockData.block_hash !== this.checkpoint.blockHash) {
         this.logger.info(`Detected reorg at block #${blockData.block_number}`);
         await this.handleReorg(blockData.block_number);
       } else {
@@ -560,14 +581,13 @@ export class StarknetIndexer {
         blockData.parent_hash,
         timestamp
       ]);
-      
+
       await this.updateCursor(blockData.block_number, blockData.block_hash, client);
       this.logger.info(`Successfully processed block #${blockData.block_number}`);
 
       if (this.provider) {
         try {
           const blockWithReceipts = await this.provider.getBlockWithReceipts(blockData.block_number);
-          
           if (!blockWithReceipts || !blockWithReceipts.transactions) {
             return;
           }
@@ -643,13 +663,16 @@ export class StarknetIndexer {
                   }
                 }
 
-                for (const { handler } of handlerConfigs) {
-                  try {
-                    await handler(parsedEvent, client, this);
-                  } catch (error) {
-                    this.logger.error(`Error processing event handler for contract ${fromAddress}:`, error);
-                    throw error; // Rethrow to trigger rollback
-                  }
+                try {
+                  await Promise.all(
+                    handlerConfigs.map(async ({ handler }) => {
+                      await handler(parsedEvent, client, this);
+                      eventsProcessed++;
+                    })
+                  );
+                } catch (error) {
+                  this.logger.error(`Error processing event handlers for contract ${fromAddress}:`, error);
+                  throw error; // Triggers rollback
                 }
               }
             }
@@ -660,6 +683,19 @@ export class StarknetIndexer {
         }
       }
     }, { blockNumber: blockData.block_number });
+
+    // Log performance metrics
+    const metrics = {
+      blockNumber: blockData.block_number,
+      blockTimestamp: new Date().toISOString(),
+      durationMs: Date.now() - startTime,
+      eventsProcessed,
+      lagInSeconds: (Date.now() - new Date(blockData.timestamp * 1000).getTime()) / 1000,
+      timestamp: new Date().toLocaleString()
+    };
+    
+    this.logger.info(`[Block] Fetched block ${blockData.block_number} in ${metrics.durationMs}ms`);
+    this.logger.info(JSON.stringify(metrics));
   }
   
   // Handle chain reorgs
@@ -673,7 +709,7 @@ export class StarknetIndexer {
         WHERE number >= $1
       `, [forkBlockNumber]);
       
-      if (this.cursor && this.cursor.blockNumber >= forkBlockNumber) {
+      if (this.checkpoint && this.checkpoint.blockNumber >= forkBlockNumber) {
         await this.updateCursor(forkBlockNumber - 1, '', client);
       }
       
@@ -741,7 +777,7 @@ export class StarknetIndexer {
   }
 
   private async updateCursor(blockNumber: number, blockHash: string, client: PoolClient): Promise<void> {
-    this.cursor = { blockNumber, blockHash };
+    this.checkpoint = { blockNumber, blockHash };
     await client.query(`
       UPDATE indexer_state 
       SET last_block_number = $1, last_block_hash = $2
