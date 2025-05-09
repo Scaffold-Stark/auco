@@ -565,7 +565,6 @@ export class StarknetIndexer {
       ]);
       
       await this.updateCursor(blockData.block_number, blockData.block_hash, client);
-      this.logger.info(`Successfully processed block #${blockData.block_number}`);
 
       if (this.provider) {
         try {
@@ -673,7 +672,7 @@ export class StarknetIndexer {
         blockNumber: blockData.block_number,
         eventsProcessed,
         elapsed: `${elapsed}ms`,
-        lagSeconds
+        lagSeconds: `${lagSeconds}s`
       });
     }, { blockNumber: blockData.block_number });
   }
