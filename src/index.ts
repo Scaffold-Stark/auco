@@ -467,7 +467,7 @@ export class StarknetIndexer {
   
   // Start the indexer
   public async start(): Promise<void> {
-    const startingBlock = await this.initializeDatabase() || 0;
+    await this.initializeDatabase() || 0;
     this.logger.info(`Starting from block ${this.cursor?.blockNumber}`);
     
     const currentBlock = this.provider ? await this.provider.getBlockNumber() : 0;
@@ -542,6 +542,9 @@ export class StarknetIndexer {
     }
     
     await this.withTransaction('Processing block', async (client) => {
+      const startTime = Date.now();
+      let eventsProcessed = 0;
+  
       let timestamp;
       if (typeof blockData.timestamp === 'number') {
         timestamp = blockData.timestamp * 1000;
@@ -585,6 +588,8 @@ export class StarknetIndexer {
                 continue;
               }
               
+              eventsProcessed++;
+
               const eventObj = {
                 block_number: blockData.block_number,
                 block_hash: (blockWithReceipts as any).block_hash || '',
@@ -659,6 +664,17 @@ export class StarknetIndexer {
           throw error; // Rethrow to trigger rollback
         }
       }
+
+      const endTime = Date.now();
+      const elapsed = endTime - startTime;
+      const lagSeconds = Math.floor((endTime - blockData.timestamp) / 1000);
+
+      this.logger.info(`Processed block #${blockData.block_number}`, {
+        blockNumber: blockData.block_number,
+        eventsProcessed,
+        elapsed: `${elapsed}ms`,
+        lagSeconds
+      });
     }, { blockNumber: blockData.block_number });
   }
   
