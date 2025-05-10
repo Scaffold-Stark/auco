@@ -581,7 +581,6 @@ export class StarknetIndexer {
       async (client) => {
         const startTime = Date.now();
         let eventsProcessed = 0;
-  
         let timestamp;
         if (typeof blockData.timestamp === 'number') {
           timestamp = blockData.timestamp * 1000;
@@ -618,6 +617,7 @@ export class StarknetIndexer {
               if (!receipt.events || receipt.events.length === 0) continue;
 
               for (let eventIndex = 0; eventIndex < receipt.events.length; eventIndex++) {
+                eventsProcessed++;
                 const event = receipt.events[eventIndex];
                 const fromAddress = this.normalizeAddress(event.from_address);
 
@@ -713,13 +713,13 @@ export class StarknetIndexer {
         const endTime = Date.now();
         const elapsed = endTime - startTime;
         const lagSeconds = Math.floor((endTime - blockData.timestamp) / 1000);
-  
+
         this.logger.info(`Processed block #${blockData.block_number}`, {
           blockNumber: blockData.block_number,
           eventsProcessed,
           elapsed: `${elapsed}ms`,
-          lagSeconds: `${lagSeconds}s`
-        });  
+          lagSeconds: `${lagSeconds}s`,
+        });
       },
       { blockNumber: blockData.block_number }
     );
