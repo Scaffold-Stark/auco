@@ -8,6 +8,7 @@
     "dev": "tsc --skipLibCheck -w"
   },
   "dependencies": {
+    "abi-wan-kanabi": "^2.2.4",
     "pg": "^8.11.0",
     "starknet": "^7.1.0"
   },

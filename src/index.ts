@@ -1,5 +1,7 @@
 import { WebSocketChannel, RpcProvider, validateAndParseAddress, CallData, events, Abi, hash } from 'starknet';
 import { Pool, PoolClient } from 'pg';
+import { EventToPrimitiveType } from './types/abi-wan-helpers';
+import { ExtractAbiEventNames } from 'abi-wan-kanabi/kanabi';
 
 export enum LogLevel {
   DEBUG = 'debug',
@@ -59,10 +61,32 @@ export interface IndexerConfig {
   logger?: Logger;
 }
 
-export type EventHandler = (event: any, client: PoolClient, indexer: StarknetIndexer) => Promise<void>;
+export type StarknetEvent<TAbi extends Abi, TEventName extends ExtractAbiEventNames<TAbi>> = {
+  block_number: number;
+  block_hash: string;
+  transaction_hash: string;
+  from_address: string;
+  event_index: number;
+  keys: string[];
+  data: string[];
+  parsed: EventToPrimitiveType<TAbi, TEventName>;
+};
+
+export type EventHandler<TAbi extends Abi, TEventName extends ExtractAbiEventNames<TAbi>> = (
+  event: StarknetEvent<TAbi, TEventName>,
+  client: PoolClient,
+  indexer: StarknetIndexer
+) => Promise<void>;
+
+interface EventHandlerParams<TAbi extends Abi, TEventName extends ExtractAbiEventNames<TAbi>> {
+  contractAddress: string;
+  abi: TAbi;
+  eventName: TEventName;
+  handler: EventHandler<TAbi, TEventName>;
+}
 
 interface EventHandlerConfig {
-  handler: EventHandler;
+  handler: EventHandler<any, any>;
 }
 
 interface QueuedBlock {
@@ -70,12 +94,6 @@ interface QueuedBlock {
   block_hash: string;
   parent_hash: string;
   timestamp: number;
-}
-
-interface EventHandlerParams {
-  contractAddress: string;
-  eventName?: string;
-  handler: EventHandler;
 }
 
 interface Cursor {
@@ -182,8 +200,7 @@ export class StarknetIndexer {
     return hash.getSelectorFromName(cleanName);
   }
 
-  private async validateEventName(contractAddress: string, eventName: string): Promise<boolean> {
-    const abi = await this.getContractABI(contractAddress);
+  private async validateEventName(abi: Abi, contractAddress: string, eventName: string): Promise<boolean> {
     if (!abi) {
       this.logger.error(`No ABI found for contract ${contractAddress}`);
       return false;
@@ -269,7 +286,11 @@ export class StarknetIndexer {
             from_address: fromAddress,
             event_index: eventIndex,
             keys: event.keys,
-            data: event.data
+            data: event.data,
+            parsed: {},
+            event: {
+              parsed: {}
+            }
           };
 
           let handlerConfigs: EventHandlerConfig[] = [];
@@ -302,8 +323,6 @@ export class StarknetIndexer {
                   const parsedValues = parsedEvents[0][eventKey];
 
                   const parsedEventWithOriginal = {
-                    ...parsedEvents[0],
-                    _rawEvent: eventObj,
                     block_number: eventObj.block_number,
                     block_hash: eventObj.block_hash,
                     transaction_hash: eventObj.transaction_hash,
@@ -311,7 +330,10 @@ export class StarknetIndexer {
                     event_index: eventObj.event_index,
                     keys: eventObj.keys,
                     data: eventObj.data,
-                    parsed: parsedValues // Add the parsed values directly
+                    parsed: parsedValues,
+                    event: {
+                      parsed: parsedValues
+                    }
                   };
                   parsedEvent = parsedEventWithOriginal;
                   this.logger.debug(`Parsed event values:`, parsedValues);
@@ -401,36 +423,17 @@ export class StarknetIndexer {
     }
   }
   
-  // Get the ABI for a contract address and cache it
-  private async getContractABI(address: string): Promise<any> {
-    if (!this.provider) {
-      this.logger.error('No RPC provider available to fetch ABI');
-      return undefined;
-    }
-
-    if (this.abiMapping.has(address)) {
-      this.logger.debug(`Using cached ABI for contract ${address}`);
-      return this.abiMapping.get(address);
-    }
-
-    return await this.withErrorHandling('Fetching contract ABI', async () => {
-      const contractClass = await this.provider!.getClassAt(address);
-      const abi = contractClass.abi;
-      this.abiMapping.set(address, abi);
-      this.logger.info(`Cached ABI for contract ${address}`);
-      return abi;
-    }, { address });
-  }
-  
   // Register an event handler for a contract address with optional event name
-  public async onEvent(params: EventHandlerParams): Promise<void> {
-    const { contractAddress, eventName, handler } = params;
+  public async onEvent<TAbi extends Abi, TEventName extends ExtractAbiEventNames<TAbi>>(
+    params: EventHandlerParams<TAbi, TEventName>
+  ): Promise<void> {
+    const { contractAddress, eventName, abi, handler } = params;
 
     if (!contractAddress) {
       throw new Error('Contract address is required');
     }
 
-    if(!handler) {
+    if (!handler) {
       throw new Error('Handler is required');
     }
 
@@ -440,11 +443,11 @@ export class StarknetIndexer {
     this.contractAddresses.add(normalizedAddress);
     
     const handlerConfig: EventHandlerConfig = {
-      handler
+      handler: handler as EventHandler<any, any>
     };
     
     if (eventName) {
-      const isValid = await this.validateEventName(normalizedAddress, eventName);
+      const isValid = await this.validateEventName(abi, normalizedAddress, eventName);
       if (!isValid) {
         throw new Error(`Event "${eventName}" not found in contract ${normalizedAddress} ABI`);
       }
@@ -462,7 +465,7 @@ export class StarknetIndexer {
     handlers.push(handlerConfig);
     this.logger.info(`Successfully registered handler for ${handlerKey}`);
 
-    await this.getContractABI(normalizedAddress);
+    this.abiMapping.set(normalizedAddress, abi);
   }
   
   // Start the indexer
@@ -592,7 +595,8 @@ export class StarknetIndexer {
                 from_address: fromAddress,
                 event_index: eventIndex,
                 keys: event.keys,
-                data: event.data
+                data: event.data,
+                parsed: {},
               };
 
               let handlerConfigs: EventHandlerConfig[] = [];
@@ -632,7 +636,7 @@ export class StarknetIndexer {
                         event_index: eventObj.event_index,
                         keys: eventObj.keys,
                         data: eventObj.data,
-                        parsed: parsedValues // Add the parsed values directly
+                        parsed: parsedValues,
                       };
                       parsedEvent = parsedEventWithOriginal;
                       this.logger.debug(`Parsed event values:`, parsedValues);
