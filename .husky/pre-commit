@@ -1,0 +1,13 @@
+#!/usr/bin/env sh
+. "$(dirname -- "$0")/_/husky.sh"
+
+echo "💅 Running prettier..."
+npm run format || (echo "❌ Prettier failed. Please fix the formatting issues manually." && exit 1)
+
+echo "🔧 Running auto-fix..."
+npm run lint:fix || (echo "❌ Auto-fix failed. Please fix the issues manually." && exit 1)
+
+echo "🔍 Running lint checks..."
+npm run lint || (echo "❌ Lint failed. Please fix the issues before committing." && exit 1)
+
+echo "✅ Pre-commit checks passed!"
