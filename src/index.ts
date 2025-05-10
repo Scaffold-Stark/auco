@@ -335,6 +335,8 @@ export class StarknetIndexer {
                   const parsedValues = parsedEvents[0][eventKey];
 
                   const parsedEventWithOriginal = {
+                    ...parsedEvents[0],
+                    _rawEvent: eventObj,
                     block_number: eventObj.block_number,
                     block_hash: eventObj.block_hash,
                     transaction_hash: eventObj.transaction_hash,
