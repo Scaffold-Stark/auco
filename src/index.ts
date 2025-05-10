@@ -437,7 +437,7 @@ export class StarknetIndexer {
     this.contractAddresses.add(normalizedAddress);
     
     const handlerConfig: EventHandlerConfig = {
-      handler: handler as EventHandler<any, any>
+      handler
     };
     
     if (eventName) {
