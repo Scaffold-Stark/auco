@@ -288,9 +288,6 @@ export class StarknetIndexer {
             keys: event.keys,
             data: event.data,
             parsed: {},
-            event: {
-              parsed: {}
-            }
           };
 
           let handlerConfigs: EventHandlerConfig[] = [];
@@ -331,9 +328,6 @@ export class StarknetIndexer {
                     keys: eventObj.keys,
                     data: eventObj.data,
                     parsed: parsedValues,
-                    event: {
-                      parsed: parsedValues
-                    }
                   };
                   parsedEvent = parsedEventWithOriginal;
                   this.logger.debug(`Parsed event values:`, parsedValues);
