@@ -720,32 +720,46 @@ export class StarknetIndexer {
 
     for (let blockNumber = fromBlock; blockNumber <= toBlock; blockNumber += chunkSize) {
       const chunkEndBlock = Math.min(blockNumber + chunkSize - 1, toBlock);
-
-      // First, insert all blocks in this chunk
+      
+      // Pre-fetch all blocks and events before starting transaction
+      const blocks: any[] = [];
       for (let currentBlock = blockNumber; currentBlock <= chunkEndBlock; currentBlock++) {
         const block = await this.provider?.getBlock(currentBlock);
-
         if (!block || !block.block_hash) {
           this.logger.error(`No block found for block #${currentBlock}`);
           continue;
         }
-
-        const blockData = {
+        blocks.push({
           block_number: block.block_number,
           block_hash: block.block_hash,
           parent_hash: block.parent_hash,
           timestamp: block.timestamp,
-        };
-
-        await this.withTransaction(`Inserting block ${currentBlock}`, async (client) => {
-          await this.insertBlock(blockData, client);
         });
       }
 
-      // Then process events for all blocks in this chunk
+      // Process all blocks and their events in a single transaction
       await this.withTransaction(
-        `Processing events for blocks ${blockNumber} to ${chunkEndBlock}`,
+        `Processing blocks ${blockNumber} to ${chunkEndBlock} and their events`,
         async (client) => {
+          // Batch insert all blocks
+          if (blocks.length > 0) {
+            const values = blocks.map(block => {
+              const timestamp = typeof block.timestamp === 'number' ? block.timestamp * 1000 : new Date(block.timestamp).getTime();
+              return `(${block.block_number}, '${block.block_hash}', '${block.parent_hash}', ${timestamp})`;
+            }).join(',');
+
+            await client.query(`
+              INSERT INTO blocks (number, hash, parent_hash, timestamp)
+              VALUES ${values}
+              ON CONFLICT (number) DO UPDATE
+              SET hash = EXCLUDED.hash, 
+                  parent_hash = EXCLUDED.parent_hash, 
+                  timestamp = EXCLUDED.timestamp, 
+                  is_canonical = TRUE
+            `);
+          }
+
+          // Process events if we have any
           await this.processBlockEvents(blockNumber, chunkEndBlock, client);
         }
       );
