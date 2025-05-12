@@ -842,10 +842,10 @@ export class StarknetIndexer {
           to_block: { block_number: toBlock },
           address: contractAddress,
           chunk_size: 1000,
-        continuation_token: continuationToken,
-      });
+          continuation_token: continuationToken,
+        });
 
-      allEvents = [...allEvents, ...response.events];
+        allEvents = [...allEvents, ...response.events];
         continuationToken = response.continuation_token;
       } while (continuationToken);
     }
