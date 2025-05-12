@@ -827,24 +827,28 @@ export class StarknetIndexer {
     fromBlock: number,
     toBlock: number
   ): Promise<EmittedEvent[] | undefined> {
-    if (!this.provider) {
-      this.logger.error('No provider found');
+    if (!this.provider || !this.contractAddresses) {
+      this.logger.error('No provider or contract addresses found');
       return;
     }
 
     let continuationToken;
     let allEvents: EmittedEvent[] = [];
-    do {
-      const response = await this.provider.getEvents({
-        from_block: { block_number: fromBlock },
-        to_block: { block_number: toBlock },
-        chunk_size: 1000,
+
+    for (const contractAddress of this.contractAddresses) {
+      do {
+        const response = await this.provider.getEvents({
+          from_block: { block_number: fromBlock },
+          to_block: { block_number: toBlock },
+          address: contractAddress,
+          chunk_size: 1000,
         continuation_token: continuationToken,
       });
 
       allEvents = [...allEvents, ...response.events];
-      continuationToken = response.continuation_token;
-    } while (continuationToken);
+        continuationToken = response.continuation_token;
+      } while (continuationToken);
+    }
 
     return allEvents;
   }
