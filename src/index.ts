@@ -5,6 +5,7 @@ import {
   CallData,
   events,
   hash,
+  EmittedEvent,
 } from 'starknet';
 import { Pool, PoolClient } from 'pg';
 
@@ -601,14 +602,15 @@ export class StarknetIndexer {
 
         if (this.provider) {
           try {
-            const blockEvents = await this.provider.getEvents({
-              chunk_size: 1000,
-              from_block: { block_number: blockData.block_number },
-              to_block: { block_number: blockData.block_number },
-            });
+            const blockEvents = await this.fetchEvents(blockData.block_number, blockData.block_number);
 
-            for (let eventIndex = 0; eventIndex < blockEvents.events.length; eventIndex++) {
-              const event = blockEvents.events[eventIndex];
+            if (!blockEvents) {
+              this.logger.error(`No events found for block #${blockData.block_number}`);
+              return;
+            }
+
+            for (let eventIndex = 0; eventIndex < blockEvents.length; eventIndex++) {
+              const event = blockEvents[eventIndex];
               const fromAddress = this.normalizeAddress(event.from_address);
 
               if (this.contractAddresses.size > 0 && !this.contractAddresses.has(fromAddress)) {
@@ -616,8 +618,8 @@ export class StarknetIndexer {
               }
 
               const eventObj = {
-                block_number: blockData.block_number,
-                block_hash: blockData.block_hash || '',
+                block_number: event.block_number,
+                block_hash: event.block_hash || '',
                 transaction_hash: event.transaction_hash,
                 from_address: fromAddress,
                 event_index: eventIndex,
@@ -816,5 +818,28 @@ export class StarknetIndexer {
       this.logger.error(`${operation} failed:`, { ...context, error });
       return undefined;
     }
+  }
+
+  private async fetchEvents(fromBlock: number, toBlock: number): Promise<EmittedEvent[] | undefined> {
+    if (!this.provider) {
+      this.logger.error('No provider found');
+      return;
+    }
+
+    let continuationToken;
+    let allEvents: EmittedEvent[] = [];
+    do {
+      const response = await this.provider.getEvents({
+        from_block: { block_number: fromBlock },
+        to_block: { block_number: toBlock },
+        chunk_size: 1000,
+        continuation_token: continuationToken
+      });
+  
+      allEvents = [...allEvents, ...response.events];
+      continuationToken = response.continuation_token;
+    } while (continuationToken);
+
+    return allEvents;
   }
 }
