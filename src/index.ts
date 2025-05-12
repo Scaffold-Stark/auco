@@ -602,7 +602,10 @@ export class StarknetIndexer {
 
         if (this.provider) {
           try {
-            const blockEvents = await this.fetchEvents(blockData.block_number, blockData.block_number);
+            const blockEvents = await this.fetchEvents(
+              blockData.block_number,
+              blockData.block_number
+            );
 
             if (!blockEvents) {
               this.logger.error(`No events found for block #${blockData.block_number}`);
@@ -820,7 +823,10 @@ export class StarknetIndexer {
     }
   }
 
-  private async fetchEvents(fromBlock: number, toBlock: number): Promise<EmittedEvent[] | undefined> {
+  private async fetchEvents(
+    fromBlock: number,
+    toBlock: number
+  ): Promise<EmittedEvent[] | undefined> {
     if (!this.provider) {
       this.logger.error('No provider found');
       return;
@@ -833,9 +839,9 @@ export class StarknetIndexer {
         from_block: { block_number: fromBlock },
         to_block: { block_number: toBlock },
         chunk_size: 1000,
-        continuation_token: continuationToken
+        continuation_token: continuationToken,
       });
-  
+
       allEvents = [...allEvents, ...response.events];
       continuationToken = response.continuation_token;
     } while (continuationToken);
