@@ -530,31 +530,7 @@ export class StarknetIndexer {
       this.logger.info(`Processing historical blocks from ${targetBlock} to ${currentBlock}`);
       this.isProcessingBlocks = true;
 
-      try {
-        for (let blockNumber = targetBlock; blockNumber <= currentBlock; blockNumber++) {
-          // Skip if already processed
-          if (this.cursor && blockNumber <= this.cursor.blockNumber) {
-            this.logger.debug(`Skipping block #${blockNumber} - already processed`);
-            continue;
-          }
-
-          try {
-            const block = await this.provider.getBlock(blockNumber);
-            if (block) {
-              await this.processNewHead({
-                block_number: blockNumber,
-                block_hash: block.block_hash,
-                parent_hash: block.parent_hash,
-                timestamp: block.timestamp,
-              });
-            }
-          } catch (error) {
-            this.logger.error(`[Block] Error fetching block ${blockNumber}:`, error);
-          }
-        }
-      } catch (error) {
-        this.logger.error('[Indexer] Failed to fetch historical blocks:', error);
-      }
+      await this.processHistoricalBlocks(targetBlock, currentBlock);
 
       this.isProcessingBlocks = false;
       this.logger.info('[Indexer] Processing queued blocks...');
@@ -580,129 +556,13 @@ export class StarknetIndexer {
     await this.withTransaction(
       'Processing block',
       async (client) => {
-        let timestamp;
-        if (typeof blockData.timestamp === 'number') {
-          timestamp = blockData.timestamp * 1000;
-        } else {
-          timestamp = new Date(blockData.timestamp).getTime();
-        }
-
-        await client.query(
-          `
-            INSERT INTO blocks (number, hash, parent_hash, timestamp)
-            VALUES ($1, $2, $3, $4)
-            ON CONFLICT (number) DO UPDATE
-            SET hash = $2, parent_hash = $3, timestamp = $4, is_canonical = TRUE
-          `,
-          [blockData.block_number, blockData.block_hash, blockData.parent_hash, timestamp]
-        );
+        await this.insertBlock(blockData, client);
 
         await this.updateCursor(blockData.block_number, blockData.block_hash, client);
         this.logger.info(`Successfully processed block #${blockData.block_number}`);
 
         if (this.provider) {
-          try {
-            const blockEvents = await this.fetchEvents(
-              blockData.block_number,
-              blockData.block_number
-            );
-
-            if (!blockEvents) {
-              this.logger.error(`No events found for block #${blockData.block_number}`);
-              return;
-            }
-
-            for (let eventIndex = 0; eventIndex < blockEvents.length; eventIndex++) {
-              const event = blockEvents[eventIndex];
-              const fromAddress = this.normalizeAddress(event.from_address);
-
-              if (this.contractAddresses.size > 0 && !this.contractAddresses.has(fromAddress)) {
-                continue;
-              }
-
-              const eventObj = {
-                block_number: event.block_number,
-                block_hash: event.block_hash || '',
-                transaction_hash: event.transaction_hash,
-                from_address: fromAddress,
-                event_index: eventIndex,
-                keys: event.keys,
-                data: event.data,
-              };
-
-              let handlerConfigs: EventHandlerConfig[] = [];
-
-              if (event.keys && event.keys.length > 0) {
-                const eventSelector = event.keys[0];
-                const specificHandlerKey = `${fromAddress}:${eventSelector}`;
-                const specificHandlers = this.eventHandlers.get(specificHandlerKey) || [];
-                handlerConfigs = [...specificHandlers];
-              }
-
-              const generalHandlers = this.eventHandlers.get(fromAddress) || [];
-              handlerConfigs = [...handlerConfigs, ...generalHandlers];
-
-              if (handlerConfigs.length > 0) {
-                const abi = this.abiMapping.get(fromAddress);
-                let parsedEvent = eventObj;
-
-                if (abi) {
-                  try {
-                    const abiEvents = events.getAbiEvents(abi);
-                    const abiStructs = CallData.getAbiStruct(abi);
-                    const abiEnums = CallData.getAbiEnum(abi);
-
-                    const parsedEvents = events.parseEvents(
-                      [eventObj],
-                      abiEvents,
-                      abiStructs,
-                      abiEnums
-                    );
-
-                    if (parsedEvents && parsedEvents.length > 0) {
-                      // Get the first key of the parsed event (the event name)
-                      const eventKey = Object.keys(parsedEvents[0])[0];
-                      const parsedValues = parsedEvents[0][eventKey];
-
-                      const parsedEventWithOriginal = {
-                        block_number: eventObj.block_number,
-                        block_hash: eventObj.block_hash,
-                        transaction_hash: eventObj.transaction_hash,
-                        from_address: fromAddress,
-                        event_index: eventObj.event_index,
-                        keys: eventObj.keys,
-                        data: eventObj.data,
-                        parsed: parsedValues, // Add the parsed values directly
-                      };
-                      parsedEvent = parsedEventWithOriginal;
-                      this.logger.debug(`Parsed event values:`, parsedValues);
-                    }
-                  } catch (error) {
-                    this.logger.error(`Error parsing event from contract ${fromAddress}:`, error);
-                    throw error; // Rethrow to trigger rollback
-                  }
-                }
-
-                for (const { handler } of handlerConfigs) {
-                  try {
-                    await handler(parsedEvent, client, this);
-                  } catch (error) {
-                    this.logger.error(
-                      `Error processing event handler for contract ${fromAddress}:`,
-                      error
-                    );
-                    throw error; // Rethrow to trigger rollback
-                  }
-                }
-              }
-            }
-          } catch (error) {
-            this.logger.error(
-              `Error processing block ${blockData.block_number} transactions:`,
-              error
-            );
-            throw error; // Rethrow to trigger rollback
-          }
+          await this.processBlockEvents(blockData.block_number, blockData.block_number, client);
         }
       },
       { blockNumber: blockData.block_number }
@@ -788,6 +648,7 @@ export class StarknetIndexer {
         if (this.provider) {
           await this.processBlockTransactions(block.block_number);
         }
+        this.logger.info(`Successfully processed queued block #${block.block_number}`);
       } catch (error) {
         this.logger.error(`[Block] Error processing queued block ${block.block_number}:`, error);
       }
@@ -852,5 +713,167 @@ export class StarknetIndexer {
     }
 
     return allEvents;
+  }
+
+  private async processHistoricalBlocks(fromBlock: number, toBlock: number): Promise<void> {
+    const chunkSize = 100;
+
+    for (let blockNumber = fromBlock; blockNumber <= toBlock; blockNumber += chunkSize) {
+      const chunkEndBlock = Math.min(blockNumber + chunkSize - 1, toBlock);
+
+      // First, insert all blocks in this chunk
+      for (let currentBlock = blockNumber; currentBlock <= chunkEndBlock; currentBlock++) {
+        const block = await this.provider?.getBlock(currentBlock);
+
+        if (!block || !block.block_hash) {
+          this.logger.error(`No block found for block #${currentBlock}`);
+          continue;
+        }
+
+        const blockData = {
+          block_number: block.block_number,
+          block_hash: block.block_hash,
+          parent_hash: block.parent_hash,
+          timestamp: block.timestamp,
+        };
+
+        await this.withTransaction(`Inserting block ${currentBlock}`, async (client) => {
+          await this.insertBlock(blockData, client);
+        });
+      }
+
+      // Then process events for all blocks in this chunk
+      await this.withTransaction(
+        `Processing events for blocks ${blockNumber} to ${chunkEndBlock}`,
+        async (client) => {
+          await this.processBlockEvents(blockNumber, chunkEndBlock, client);
+        }
+      );
+    }
+  }
+
+  private async processBlockEvents(fromBlock: number, toBlock: number, client: PoolClient) {
+    if (!this.provider) {
+      return;
+    }
+
+    try {
+      const blockEvents = await this.fetchEvents(fromBlock, toBlock);
+
+      if (!blockEvents) {
+        this.logger.error(`No events found for block #${fromBlock} to #${toBlock}`);
+        return;
+      }
+
+      for (let eventIndex = 0; eventIndex < blockEvents.length; eventIndex++) {
+        const event = blockEvents[eventIndex];
+        const fromAddress = this.normalizeAddress(event.from_address);
+
+        if (this.contractAddresses.size > 0 && !this.contractAddresses.has(fromAddress)) {
+          continue;
+        }
+
+        const eventObj = {
+          block_number: event.block_number,
+          block_hash: event.block_hash || '',
+          transaction_hash: event.transaction_hash,
+          from_address: fromAddress,
+          event_index: eventIndex,
+          keys: event.keys,
+          data: event.data,
+        };
+
+        let handlerConfigs: EventHandlerConfig[] = [];
+
+        if (event.keys && event.keys.length > 0) {
+          const eventSelector = event.keys[0];
+          const specificHandlerKey = `${fromAddress}:${eventSelector}`;
+          const specificHandlers = this.eventHandlers.get(specificHandlerKey) || [];
+          handlerConfigs = [...specificHandlers];
+        }
+
+        const generalHandlers = this.eventHandlers.get(fromAddress) || [];
+        handlerConfigs = [...handlerConfigs, ...generalHandlers];
+
+        if (handlerConfigs.length > 0) {
+          const abi = this.abiMapping.get(fromAddress);
+          let parsedEvent = eventObj;
+
+          if (abi) {
+            try {
+              const abiEvents = events.getAbiEvents(abi);
+              const abiStructs = CallData.getAbiStruct(abi);
+              const abiEnums = CallData.getAbiEnum(abi);
+
+              const parsedEvents = events.parseEvents([eventObj], abiEvents, abiStructs, abiEnums);
+
+              if (parsedEvents && parsedEvents.length > 0) {
+                // Get the first key of the parsed event (the event name)
+                const eventKey = Object.keys(parsedEvents[0])[0];
+                const parsedValues = parsedEvents[0][eventKey];
+
+                const parsedEventWithOriginal = {
+                  block_number: eventObj.block_number,
+                  block_hash: eventObj.block_hash,
+                  transaction_hash: eventObj.transaction_hash,
+                  from_address: fromAddress,
+                  event_index: eventObj.event_index,
+                  keys: eventObj.keys,
+                  data: eventObj.data,
+                  parsed: parsedValues, // Add the parsed values directly
+                };
+                parsedEvent = parsedEventWithOriginal;
+                this.logger.debug(`Parsed event values:`, parsedValues);
+              }
+            } catch (error) {
+              this.logger.error(`Error parsing event from contract ${fromAddress}:`, error);
+              throw error; // Rethrow to trigger rollback
+            }
+          }
+
+          for (const { handler } of handlerConfigs) {
+            try {
+              await handler(parsedEvent, client, this);
+            } catch (error) {
+              this.logger.error(
+                `Error processing event handler for contract ${fromAddress}:`,
+                error
+              );
+              throw error; // Rethrow to trigger rollback
+            }
+          }
+        }
+      }
+    } catch (error) {
+      this.logger.error(`Error processing block ${fromBlock} to ${toBlock} transactions:`, error);
+      throw error; // Rethrow to trigger rollback
+    }
+  }
+
+  private async insertBlock(
+    blockData: {
+      block_number: number;
+      block_hash: string;
+      parent_hash: string;
+      timestamp: number;
+    },
+    client: PoolClient
+  ) {
+    let timestamp;
+    if (typeof blockData.timestamp === 'number') {
+      timestamp = blockData.timestamp * 1000;
+    } else {
+      timestamp = new Date(blockData.timestamp).getTime();
+    }
+
+    await client.query(
+      `
+        INSERT INTO blocks (number, hash, parent_hash, timestamp)
+        VALUES ($1, $2, $3, $4)
+        ON CONFLICT (number) DO UPDATE
+        SET hash = $2, parent_hash = $3, timestamp = $4, is_canonical = TRUE
+      `,
+      [blockData.block_number, blockData.block_hash, blockData.parent_hash, timestamp]
+    );
   }
 }
