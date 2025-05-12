@@ -754,7 +754,8 @@ export class StarknetIndexer {
 
   private async processBlockEvents(fromBlock: number, toBlock: number, client: PoolClient) {
     if (!this.provider) {
-      return;
+      this.logger.error('No RPC provider available to fetch ABI');
+      return undefined;
     }
 
     try {
