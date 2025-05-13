@@ -1,37 +1,38 @@
 {
-    "name": "starknet-js-indexer",
-    "version": "0.1.0",
-    "main": "dist/index.js",
-    "types": "dist/index.d.ts",
-    "scripts": {
-      "build": "tsc --skipLibCheck",
-      "lint": "eslint . --ext .ts",
-      "lint:fix": "eslint . --ext .ts --fix",
-      "format": "prettier --write \"**/*.{ts,js,json,md}\""
-    },
-    "dependencies": {
-      "pg": "^8.11.0",
-      "starknet": "^7.1.0"
-    },
-    "devDependencies": {
-      "@types/pg": "^8.10.2",
-      "@typescript-eslint/eslint-plugin": "^8.32.0",
-      "@typescript-eslint/parser": "^8.32.0",
-      "eslint": "^8.56.0",
-      "eslint-config-prettier": "^10.1.5",
-      "eslint-plugin-prettier": "^5.4.0",
-      "husky": "^9.1.7",
-      "lint-staged": "^15.5.2",
-      "prettier": "^3.5.3",
-      "typescript": "^5.0.0"
-    },
-    "lint-staged": {
-      "*.{ts,js}": [
-        "eslint --fix",
-        "prettier --write"
-      ],
-      "*.{json,md}": [
-        "prettier --write"
-      ]
-    }
+  "name": "starknet-js-indexer",
+  "version": "0.1.0",
+  "main": "dist/index.js",
+  "types": "dist/index.d.ts",
+  "scripts": {
+    "build": "tsc --skipLibCheck",
+    "lint": "eslint . --ext .ts",
+    "lint:fix": "eslint . --ext .ts --fix",
+    "format": "prettier --write \"**/*.{ts,js,json,md}\""
+  },
+  "dependencies": {
+    "abi-wan-kanabi": "^2.2.4",
+    "pg": "^8.11.0",
+    "starknet": "^7.1.0"
+  },
+  "devDependencies": {
+    "@types/pg": "^8.10.2",
+    "@typescript-eslint/eslint-plugin": "^8.32.0",
+    "@typescript-eslint/parser": "^8.32.0",
+    "eslint": "^8.56.0",
+    "eslint-config-prettier": "^10.1.5",
+    "eslint-plugin-prettier": "^5.4.0",
+    "husky": "^9.1.7",
+    "lint-staged": "^15.5.2",
+    "prettier": "^3.5.3",
+    "typescript": "^5.0.0"
+  },
+  "lint-staged": {
+    "*.{ts,js}": [
+      "eslint --fix",
+      "prettier --write"
+    ],
+    "*.{json,md}": [
+      "prettier --write"
+    ]
   }
+}
