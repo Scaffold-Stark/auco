@@ -211,7 +211,11 @@ export class StarknetIndexer {
     return hash.getSelectorFromName(cleanName);
   }
 
-  private async validateEventName(abi: Abi, contractAddress: string, eventName: string): Promise<boolean> {
+  private async validateEventName(
+    abi: Abi,
+    contractAddress: string,
+    eventName: string
+  ): Promise<boolean> {
     if (!abi) {
       this.logger.error(`No ABI found for contract ${contractAddress}`);
       return false;
@@ -443,7 +447,7 @@ export class StarknetIndexer {
       client.release();
     }
   }
-  
+
   // Register an event handler for a contract address with optional event name
   public async onEvent<TAbi extends Abi, TEventName extends ExtractAbiEventNames<TAbi>>(
     params: EventHandlerParams<TAbi, TEventName>
