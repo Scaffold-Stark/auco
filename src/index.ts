@@ -635,13 +635,13 @@ export class StarknetIndexer {
 
     this.logger.info(`[${TAG}] Processing ${blocksToProcess.length} queued blocks`);
 
-    const toBlockNumber = Math.max(...blocksToProcess.map((block) => block.block_number));
-    const fromBlockNumber = Math.min(...blocksToProcess.map((block) => block.block_number));
+    const maxBlockNumber = Math.max(...blocksToProcess.map((block) => block.block_number));
+    const minBlockNumber = Math.min(...blocksToProcess.map((block) => block.block_number));
 
     for (const block of blocksToProcess) {
       try {
         this.logger.info(`[${TAG}] Processing queued block #${block.block_number}`);
-        await this.processHistoricalBlocks(toBlockNumber, fromBlockNumber);
+        await this.processHistoricalBlocks(minBlockNumber, maxBlockNumber);
         this.logger.info(`[${TAG}] Successfully processed queued block #${block.block_number}`);
       } catch (error) {
         this.logger.error(`[${TAG}] Error processing queued block ${block.block_number}:`, error);
