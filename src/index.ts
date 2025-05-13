@@ -696,21 +696,17 @@ export class StarknetIndexer {
     let continuationToken;
     let allEvents: EmittedEvent[] = [];
 
-    //TODO (Bao): Filter events by multiple contract addresses when supported
-    for (const contractAddress of this.contractAddresses) {
-      do {
-        const response = await this.provider.getEvents({
-          from_block: { block_number: fromBlock },
-          to_block: { block_number: toBlock },
-          address: contractAddress,
-          chunk_size: 1000,
-          continuation_token: continuationToken,
-        });
+    do {
+      const response = await this.provider.getEvents({
+        from_block: { block_number: fromBlock },
+        to_block: { block_number: toBlock },
+        chunk_size: 1000,
+        continuation_token: continuationToken,
+      });
 
-        allEvents = [...allEvents, ...response.events];
-        continuationToken = response.continuation_token;
-      } while (continuationToken);
-    }
+      allEvents = [...allEvents, ...response.events];
+      continuationToken = response.continuation_token;
+    } while (continuationToken);
 
     return allEvents;
   }
@@ -720,7 +716,7 @@ export class StarknetIndexer {
 
     for (let blockNumber = fromBlock; blockNumber <= toBlock; blockNumber += chunkSize) {
       const chunkEndBlock = Math.min(blockNumber + chunkSize - 1, toBlock);
-      
+
       // Pre-fetch all blocks and events before starting transaction
       const blocks: any[] = [];
       for (let currentBlock = blockNumber; currentBlock <= chunkEndBlock; currentBlock++) {
@@ -743,10 +739,15 @@ export class StarknetIndexer {
         async (client) => {
           // Batch insert all blocks
           if (blocks.length > 0) {
-            const values = blocks.map(block => {
-              const timestamp = typeof block.timestamp === 'number' ? block.timestamp * 1000 : new Date(block.timestamp).getTime();
-              return `(${block.block_number}, '${block.block_hash}', '${block.parent_hash}', ${timestamp})`;
-            }).join(',');
+            const values = blocks
+              .map((block) => {
+                const timestamp =
+                  typeof block.timestamp === 'number'
+                    ? block.timestamp * 1000
+                    : new Date(block.timestamp).getTime();
+                return `(${block.block_number}, '${block.block_hash}', '${block.parent_hash}', ${timestamp})`;
+              })
+              .join(',');
 
             await client.query(`
               INSERT INTO blocks (number, hash, parent_hash, timestamp)
