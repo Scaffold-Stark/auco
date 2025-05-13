@@ -645,9 +645,6 @@ export class StarknetIndexer {
       try {
         this.logger.info(`Processing queued block #${block.block_number}`);
         await this.processNewHead(block);
-        if (this.provider) {
-          await this.processBlockTransactions(block.block_number);
-        }
         this.logger.info(`Successfully processed queued block #${block.block_number}`);
       } catch (error) {
         this.logger.error(`[Block] Error processing queued block ${block.block_number}:`, error);
