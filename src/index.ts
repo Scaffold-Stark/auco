@@ -225,9 +225,8 @@ export class StarknetIndexer {
       if (item.type !== 'event') continue;
 
       const fullName = item.name;
-      const cleanEventName = fullName.split('::').pop() || '';
 
-      if (cleanEventName.toLowerCase() === eventName.toLowerCase()) {
+      if (fullName.toLowerCase() === eventName.toLowerCase()) {
         this.logger.info(`Found event "${eventName}" in contract ${contractAddress}`);
         return true;
       }
