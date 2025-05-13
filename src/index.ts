@@ -835,7 +835,7 @@ export class StarknetIndexer {
     let continuationToken;
     let allEvents: EmittedEvent[] = [];
 
-    //TODO (Bao): Filter events by multiple contract addresses when supported
+    //TODO (Bao): Filter events by multiple contract addresses, event keys when supported
     for (const contractAddress of this.contractAddresses) {
       do {
         const response = await this.provider.getEvents({
