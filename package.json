@@ -7,10 +7,11 @@
     "build": "tsc --skipLibCheck",
     "lint": "eslint . --ext .ts",
     "lint:fix": "eslint . --ext .ts --fix",
-    "format": "prettier --write \"**/*.{ts,js,json,md}\""
+    "format": "prettier --write \"**/*.{ts,js,json,md}\"",
+    "postinstall": "patch-package"
   },
   "dependencies": {
-    "abi-wan-kanabi": "^2.2.4",
+    "abi-wan-kanabi": "2.2.4",
     "pg": "^8.11.0",
     "starknet": "^7.1.0"
   },
@@ -23,6 +24,7 @@
     "eslint-plugin-prettier": "^5.4.0",
     "husky": "^9.1.7",
     "lint-staged": "^15.5.2",
+    "patch-package": "^8.0.0",
     "prettier": "^3.5.3",
     "typescript": "^5.0.0"
   },
