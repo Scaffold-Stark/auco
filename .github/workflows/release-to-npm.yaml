@@ -15,7 +15,7 @@ jobs:
       - name: Checkout Files
         uses: actions/checkout@v4
         with:
-          token: ${{ secrets.GITHUB_TOKEN }}
+          token: ${{ secrets.ORG_GITHUB_TOKEN }}
 
       - name: check if skip ci
         id: check_commit
@@ -35,7 +35,7 @@ jobs:
       - name: Checkout code
         uses: actions/checkout@v4
         with:
-          token: ${{ secrets.GITHUB_TOKEN }}
+          token: ${{ secrets.ORG_GITHUB_TOKEN }}
       
       - name: Determine version bump type
         id: version
