@@ -117,7 +117,7 @@ export class StarknetIndexer {
   private started: boolean = false;
   private provider?: RpcProvider;
   private blockQueue: QueuedBlock[] = [];
-  private isProcessingBlocks: boolean = false;
+  private isProcessingHistoricalBlocks: boolean = false;
   private contractAddresses: Set<string> = new Set();
   private abiMapping: Map<string, any> = new Map();
   private cursor: Cursor | null = null;
@@ -163,11 +163,11 @@ export class StarknetIndexer {
             timestamp: data.result.timestamp,
           };
 
-          if (this.isProcessingBlocks) {
+          if (this.isProcessingHistoricalBlocks) {
             this.logger.info(`Queuing block #${blockData.block_number} for later processing`);
             this.blockQueue.push(blockData);
           } else {
-            if (!this.cursor || blockData.block_number > this.cursor.blockNumber) {
+            if (this.cursor && blockData.block_number > this.cursor.blockNumber) {
               this.logger.info(`Processing new block #${blockData.block_number}`);
               await this.processNewHead(blockData);
             } else {
@@ -522,15 +522,13 @@ export class StarknetIndexer {
     }
 
     if (targetBlock < currentBlock && this.provider) {
-      this.logger.info(`Processing historical blocks from ${targetBlock} to ${currentBlock}`);
-      this.isProcessingBlocks = true;
-
+      this.isProcessingHistoricalBlocks = true;
       await this.processHistoricalBlocks(targetBlock, currentBlock);
-
-      this.isProcessingBlocks = false;
-      this.logger.info('[Indexer] Processing queued blocks...');
-      await this.processBlockQueue();
+      this.isProcessingHistoricalBlocks = false;
     }
+    this.logger.info('[Indexer] Processing queued blocks...');
+    await this.processBlockQueue();
+    this.logger.info('[Indexer] Finished processing queued blocks');
   }
 
   // Process a new block head
@@ -631,19 +629,26 @@ export class StarknetIndexer {
 
   private async processBlockQueue(): Promise<void> {
     if (this.blockQueue.length === 0) return;
-
+    const TAG = 'processBlockQueue';
     const blocksToProcess = [...this.blockQueue];
     this.blockQueue = [];
-    this.logger.info(`Processing ${blocksToProcess.length} queued blocks`);
 
-    for (const block of blocksToProcess) {
-      try {
-        this.logger.info(`Processing queued block #${block.block_number}`);
-        await this.processNewHead(block);
-        this.logger.info(`Successfully processed queued block #${block.block_number}`);
-      } catch (error) {
-        this.logger.error(`[Block] Error processing queued block ${block.block_number}:`, error);
-      }
+    this.logger.info(`[${TAG}] Processing ${blocksToProcess.length} queued blocks`);
+
+    const maxBlockNumber = Math.max(...blocksToProcess.map((block) => block.block_number));
+    const minBlockNumber = Math.min(...blocksToProcess.map((block) => block.block_number));
+
+    try {
+      this.logger.info(`[${TAG}] Processing queued blocks ${minBlockNumber} to ${maxBlockNumber}`);
+      await this.processHistoricalBlocks(minBlockNumber, maxBlockNumber);
+      this.logger.info(
+        `[${TAG}] Successfully processed queued blocks ${minBlockNumber} to ${maxBlockNumber}`
+      );
+    } catch (error) {
+      this.logger.error(
+        `[${TAG}] Error processing queued blocks ${minBlockNumber} to ${maxBlockNumber}:`,
+        error
+      );
     }
   }
 
@@ -705,18 +710,28 @@ export class StarknetIndexer {
 
   private async processHistoricalBlocks(fromBlock: number, toBlock: number): Promise<void> {
     const chunkSize = 100;
+    const TAG = 'processHistoricalBlocks';
 
     for (let blockNumber = fromBlock; blockNumber <= toBlock; blockNumber += chunkSize) {
       const chunkEndBlock = Math.min(blockNumber + chunkSize - 1, toBlock);
+      const chunkLabel = `blocks_${blockNumber}_to_${chunkEndBlock}`;
+
+      this.logger.info(`[${TAG}] Starting processing of ${chunkLabel}`);
 
       // Pre-fetch all blocks and events before starting transaction
       const blocks: any[] = [];
       for (let currentBlock = blockNumber; currentBlock <= chunkEndBlock; currentBlock++) {
+        const blockFetchStart = Date.now();
         const block = await this.provider?.getBlock(currentBlock);
+        const fetchDuration = Date.now() - blockFetchStart;
+
         if (!block || !block.block_hash) {
-          this.logger.error(`No block found for block #${currentBlock}`);
+          this.logger.error(
+            `[${TAG}] No block found for #${currentBlock} (fetch took ${fetchDuration}ms)`
+          );
           continue;
         }
+
         blocks.push({
           block_number: block.block_number,
           block_hash: block.block_hash,
@@ -729,6 +744,8 @@ export class StarknetIndexer {
       await this.withTransaction(
         `Processing blocks ${blockNumber} to ${chunkEndBlock} and their events`,
         async (client) => {
+          const insertStart = Date.now();
+
           // Batch insert all blocks
           if (blocks.length > 0) {
             const values = blocks
@@ -750,10 +767,16 @@ export class StarknetIndexer {
                   timestamp = EXCLUDED.timestamp, 
                   is_canonical = TRUE
             `);
+
+            this.logger.info(
+              `[${TAG}] Inserted ${blocks.length} blocks in ${Date.now() - insertStart}ms`
+            );
           }
 
-          // Process events if we have any
+          // Process events
+          const eventsStart = Date.now();
           await this.processBlockEvents(blockNumber, chunkEndBlock, client);
+          this.logger.info(`[${TAG}] Events processed in ${Date.now() - eventsStart}ms`);
         }
       );
     }
@@ -762,16 +785,22 @@ export class StarknetIndexer {
   private async processBlockEvents(fromBlock: number, toBlock: number, client: PoolClient) {
     if (!this.provider) {
       this.logger.error('No RPC provider available to fetch ABI');
-      return undefined;
+      return;
     }
 
-    try {
-      const blockEvents = await this.fetchEvents(fromBlock, toBlock);
+    const TAG = 'processBlockEvents';
 
-      if (!blockEvents) {
+    try {
+      const fetchStart = Date.now();
+      const blockEvents = await this.fetchEvents(fromBlock, toBlock);
+      const fetchDuration = Date.now() - fetchStart;
+
+      if (!blockEvents || blockEvents.length === 0) {
         this.logger.error(`No events found for block #${fromBlock} to #${toBlock}`);
         return;
       }
+
+      this.logger.info(`[${TAG}] Fetched ${blockEvents.length} events in ${fetchDuration}ms`);
 
       for (let eventIndex = 0; eventIndex < blockEvents.length; eventIndex++) {
         const event = blockEvents[eventIndex];
