@@ -1,0 +1,20 @@
+name: Check Package Lock
+
+on:
+  pull_request:
+    branches: [main]
+
+jobs:
+  verify-package-lock:
+    runs-on: ubuntu-latest
+    steps:
+      - name: Checkout code
+        uses: actions/checkout@v4
+
+      - name: Set up Node.js
+        uses: actions/setup-node@v3
+        with:
+          node-version: '16'
+
+      - name: Verify with npm ci
+        run: npm ci
