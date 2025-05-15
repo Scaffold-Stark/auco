@@ -85,6 +85,22 @@ jobs:
         env:
           NODE_AUTH_TOKEN: ${{ secrets.NPM_TOKEN }}
 
+      - name: Update version in consumer repo
+        run: |
+          git clone https://x-access-token:${{ secrets.ORG_GITHUB_TOKEN }}@github.com/stormbit-finance/stormbit-indexer.git
+          cd stormbit-indexer
+
+          git config user.name "github-actions[bot]"
+          git config user.email "github-actions[bot]@users.noreply.github.com"
+
+          # Replace version in package.json
+          jq '.dependencies["starknet-js-indexer"] = "${{ env.NEW_VERSION }}"' package.json > temp.json && mv temp.json package.json
+
+          # Commit and push the change
+          git add package.json
+          git commit -m "chore: bump starknet-js-indexer to ${{ env.NEW_VERSION }}"
+          git push origin main
+
       - name: Notify Slack on Success
         if: success()
         uses: slackapi/slack-github-action@v1.26.0
