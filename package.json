@@ -13,7 +13,8 @@
   "dependencies": {
     "abi-wan-kanabi": "2.2.4",
     "pg": "^8.11.0",
-    "starknet": "^7.1.0"
+    "starknet": "^7.1.0",
+    "patch-package": "^8.0.0"
   },
   "devDependencies": {
     "@types/pg": "^8.10.2",
@@ -24,7 +25,6 @@
     "eslint-plugin-prettier": "^5.4.0",
     "husky": "^9.1.7",
     "lint-staged": "^15.5.2",
-    "patch-package": "^8.0.0",
     "prettier": "^3.5.3",
     "typescript": "^5.0.0"
   },
