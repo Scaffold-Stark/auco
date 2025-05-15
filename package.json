@@ -8,7 +8,7 @@
     "lint": "eslint . --ext .ts",
     "lint:fix": "eslint . --ext .ts --fix",
     "format": "prettier --write \"**/*.{ts,js,json,md}\"",
-    "postinstall": "node -e \"const fs = require('fs'); const path = require('path'); const filePath = path.join(process.cwd(), '..', 'abi-wan-kanabi', 'dist', 'config.d.ts'); if (fs.existsSync(filePath)) { let content = fs.readFileSync(filePath, 'utf8'); content = content.replace('AddressType: string;', 'AddressType: bigint;'); fs.writeFileSync(filePath, content); console.log('Patched AddressType in abi-wan-kanabi'); }\""
+    "postinstall": "npx patch-package"
   },
   "dependencies": {
     "abi-wan-kanabi": "2.2.4",
