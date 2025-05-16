@@ -11,6 +11,7 @@
     "postinstall": "node -e \"const fs = require('fs'); const path = require('path'); const filePath = path.join(process.cwd(), '..', 'abi-wan-kanabi', 'dist', 'config.d.ts'); if (fs.existsSync(filePath)) { let content = fs.readFileSync(filePath, 'utf8'); content = content.replace('AddressType: string;', 'AddressType: bigint;'); fs.writeFileSync(filePath, content); console.log('Patched AddressType in abi-wan-kanabi'); }\""
   },
   "dependencies": {
+    "commander": "^11.1.0",
     "abi-wan-kanabi": "2.2.4",
     "pg": "^8.11.0",
     "starknet": "^7.1.0",
@@ -36,5 +37,8 @@
     "*.{json,md}": [
       "prettier --write"
     ]
+  },
+  "bin": {
+    "abi-downloader": "./dist/scripts/download-abi.js"
   }
 }
