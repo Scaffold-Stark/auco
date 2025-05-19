@@ -922,7 +922,10 @@ export class StarknetIndexer {
   }
 
   private async checkIsBlockProcessed(blockNumber: number): Promise<boolean> {
-    const result = await this.pool.query(`SELECT * FROM blocks WHERE number = $1`, [blockNumber]);
-    return result.rows[0] !== undefined;
+    const result = await this.pool.query(
+      `SELECT EXISTS (SELECT 1 FROM blocks WHERE number = $1) AS "exists"`,
+      [blockNumber]
+    );
+    return result.rows[0].exists;
   }
 }
