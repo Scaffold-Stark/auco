@@ -167,12 +167,8 @@ export class StarknetIndexer {
             this.logger.info(`Queuing block #${blockData.block_number} for later processing`);
             this.blockQueue.push(blockData);
           } else {
-            if (this.cursor && blockData.block_number > this.cursor.blockNumber) {
-              this.logger.info(`Processing new block #${blockData.block_number}`);
-              await this.processNewHead(blockData);
-            } else {
-              this.logger.debug(`Skipping block #${blockData.block_number} - already processed`);
-            }
+            this.logger.info(`Processing new block #${blockData.block_number}`);
+            await this.processNewHead(blockData);
           }
         },
         { blockNumber: data.result.block_number }
@@ -191,9 +187,12 @@ export class StarknetIndexer {
       this.logger.error('WebSocket error:', error);
     };
 
-    this.wsChannel.onClose = async () => {
+    this.wsChannel.onClose = async (event) => {
       if (this.started) {
         this.logger.info('Connection closed, attempting to reconnect...');
+        this.logger.info('Reason: ', event.reason);
+        this.logger.info('Code: ', event.code);
+
         await this.withErrorHandling('Reconnecting WebSocket', async () => {
           await this.wsChannel.reconnect();
           await this.wsChannel.subscribeNewHeads();
@@ -541,8 +540,10 @@ export class StarknetIndexer {
         this.logger.info(`Detected reorg at block #${blockData.block_number}`);
         await this.handleReorg(blockData.block_number);
       } else {
-        this.logger.debug(`Skipping block #${blockData.block_number} - already processed`);
-        return;
+        if (await this.checkIsBlockProcessed(blockData.block_number)) {
+          this.logger.info(`Skipping block #${blockData.block_number} - already processed`);
+          return;
+        }
       }
     }
 
@@ -721,6 +722,11 @@ export class StarknetIndexer {
       // Pre-fetch all blocks and events before starting transaction
       const blocks: any[] = [];
       for (let currentBlock = blockNumber; currentBlock <= chunkEndBlock; currentBlock++) {
+        if (await this.checkIsBlockProcessed(currentBlock)) {
+          this.logger.info(`Skipping block #${currentBlock} - already processed`);
+          continue;
+        }
+
         const blockFetchStart = Date.now();
         const block = await this.provider?.getBlock(currentBlock);
         const fetchDuration = Date.now() - blockFetchStart;
@@ -913,5 +919,10 @@ export class StarknetIndexer {
       `,
       [blockData.block_number, blockData.block_hash, blockData.parent_hash, timestamp]
     );
+  }
+
+  private async checkIsBlockProcessed(blockNumber: number): Promise<boolean> {
+    const result = await this.pool.query(`SELECT * FROM blocks WHERE number = $1`, [blockNumber]);
+    return result.rows[0] !== undefined;
   }
 }
