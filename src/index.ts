@@ -930,7 +930,7 @@ export class StarknetIndexer {
   private async withExponentialBackoff<T>(
     operation: string,
     fn: () => Promise<T>,
-    maxRetries: number = 3,
+    maxRetries: number = 5,
     initialDelay: number = 500
   ): Promise<T | undefined> {
     let retries = 0;
