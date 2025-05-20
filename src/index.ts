@@ -867,9 +867,13 @@ export class StarknetIndexer {
     return block && typeof block.block_number === 'number' && typeof block.block_hash === 'string';
   }
 
+  private scheduleNextPoll(): void {
+    this.pollTimeout = setTimeout(() => this.pollLatestBlock(), POLL_INTERVAL);
+  }
+
   private async pollLatestBlock() {
     if (!this.started || !this.provider) {
-      this.pollTimeout = setTimeout(() => this.pollLatestBlock(), POLL_INTERVAL);
+      this.scheduleNextPoll();
       return;
     }
 
@@ -877,13 +881,13 @@ export class StarknetIndexer {
       const latestBlock = await this.provider.getBlock('latest');
 
       if (!this.isBlockWithNumber(latestBlock)) {
-        this.pollTimeout = setTimeout(() => this.pollLatestBlock(), POLL_INTERVAL);
+        this.scheduleNextPoll();
         this.logger.warn('Failed to fetch latest block or block is pending');
         return;
       }
 
       if (await this.checkIsBlockProcessed(latestBlock.block_number)) {
-        this.pollTimeout = setTimeout(() => this.pollLatestBlock(), POLL_INTERVAL);
+        this.scheduleNextPoll();
         this.logger.debug(`Skipping block #${latestBlock.block_number} - already processed`);
         return;
       }
@@ -907,11 +911,10 @@ export class StarknetIndexer {
         }
       }
     } catch (error) {
-      this.logger.error('Error polling latest block: ', error);
+      this.logger.error('Error polling latest block:', error);
     }
 
-    // Schedule next poll
-    this.pollTimeout = setTimeout(() => this.pollLatestBlock(), POLL_INTERVAL);
+    this.scheduleNextPoll();
   }
 
   private async checkIsBlockProcessed(blockNumber: number): Promise<boolean> {
