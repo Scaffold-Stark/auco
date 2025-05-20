@@ -1,5 +1,4 @@
 import {
-  WebSocketChannel,
   RpcProvider,
   validateAndParseAddress,
   CallData,
@@ -60,8 +59,7 @@ export class ConsoleLogger implements Logger {
 }
 
 export interface IndexerConfig {
-  wsNodeUrl: string;
-  rpcNodeUrl?: string | undefined;
+  rpcNodeUrl: string;
   databaseUrl: string;
   startingBlockNumber?: number;
   contractAddresses?: string[];
@@ -110,8 +108,9 @@ interface Cursor {
   blockHash: string;
 }
 
+const POLL_INTERVAL = 2000;
+
 export class StarknetIndexer {
-  private wsChannel: WebSocketChannel;
   private pool: Pool;
   private eventHandlers: Map<string, EventHandlerConfig[]> = new Map();
   private started: boolean = false;
@@ -122,6 +121,7 @@ export class StarknetIndexer {
   private abiMapping: Map<string, any> = new Map();
   private cursor: Cursor | null = null;
   private logger: Logger;
+  private pollTimeout?: NodeJS.Timeout;
 
   constructor(private config: IndexerConfig) {
     this.logger = config.logger || new ConsoleLogger(config.logLevel);
@@ -130,78 +130,17 @@ export class StarknetIndexer {
       connectionString: config.databaseUrl,
     });
 
-    this.wsChannel = new WebSocketChannel({
-      nodeUrl: config.wsNodeUrl,
-    });
-
     if (config.contractAddresses) {
       config.contractAddresses.forEach((address) => {
         this.contractAddresses.add(this.normalizeAddress(address));
       });
     }
 
-    if (config.rpcNodeUrl) {
-      try {
-        this.provider = new RpcProvider({ nodeUrl: config.rpcNodeUrl, specVersion: '0.8' });
-      } catch (error) {
-        this.logger.error('Failed to initialize RPC provider:', error);
-      }
+    try {
+      this.provider = new RpcProvider({ nodeUrl: config.rpcNodeUrl, specVersion: '0.8' });
+    } catch (error) {
+      this.logger.error('Failed to initialize RPC provider:', error);
     }
-
-    this.setupEventHandlers();
-  }
-
-  private setupEventHandlers() {
-    this.wsChannel.onNewHeads = async (data) => {
-      await this.withErrorHandling(
-        'Processing new head',
-        async () => {
-          const blockData = {
-            block_number: data.result.block_number,
-            block_hash: data.result.block_hash,
-            parent_hash: data.result.parent_hash,
-            timestamp: data.result.timestamp,
-          };
-
-          if (this.isProcessingHistoricalBlocks) {
-            this.logger.info(`Queuing block #${blockData.block_number} for later processing`);
-            this.blockQueue.push(blockData);
-          } else {
-            if (this.cursor && blockData.block_number > this.cursor.blockNumber) {
-              this.logger.info(`Processing new block #${blockData.block_number}`);
-              await this.processNewHead(blockData);
-            } else {
-              this.logger.debug(`Skipping block #${blockData.block_number} - already processed`);
-            }
-          }
-        },
-        { blockNumber: data.result.block_number }
-      );
-    };
-
-    this.wsChannel.onReorg = async (data) => {
-      const reorgPoint = data.result?.starting_block_number;
-      if (reorgPoint) {
-        this.logger.info(`Handling reorg from block #${reorgPoint}`);
-        await this.handleReorg(reorgPoint);
-      }
-    };
-
-    this.wsChannel.onError = (error) => {
-      this.logger.error('WebSocket error:', error);
-    };
-
-    this.wsChannel.onClose = async () => {
-      if (this.started) {
-        this.logger.info('Connection closed, attempting to reconnect...');
-        await this.withErrorHandling('Reconnecting WebSocket', async () => {
-          this.wsChannel.reconnect();
-          await this.wsChannel.waitForConnection();
-          await this.wsChannel.subscribeNewHeads();
-          this.logger.info('Successfully reconnected');
-        });
-      }
-    };
   }
 
   private getEventSelector(eventName: string): string {
@@ -503,24 +442,8 @@ export class StarknetIndexer {
     const currentBlock = this.provider ? await this.provider.getBlockNumber() : 0;
     const targetBlock = this.config.startingBlockNumber || 0;
 
-    try {
-      this.logger.info('[WebSocket] Connecting to node...');
-      await this.wsChannel.waitForConnection();
-      this.logger.info('[WebSocket] Successfully connected');
-    } catch (error) {
-      this.logger.error('[WebSocket] Failed to establish connection:', error);
-      throw error;
-    }
-
-    try {
-      this.logger.info('[WebSocket] Subscribing to new heads...');
-      await this.wsChannel.subscribeNewHeads();
-      this.started = true;
-      this.logger.info('[WebSocket] Successfully subscribed to new heads');
-    } catch (error) {
-      this.logger.error('[WebSocket] Failed to subscribe to new heads:', error);
-      throw error;
-    }
+    this.started = true;
+    this.pollLatestBlock();
 
     if (targetBlock < currentBlock && this.provider) {
       this.isProcessingHistoricalBlocks = true;
@@ -594,31 +517,10 @@ export class StarknetIndexer {
     this.logger.info('Stopping indexer...');
     this.started = false;
 
-    // Unsubscribe from all subscriptions
-    try {
-      for (const [type, subId] of this.wsChannel.subscriptions.entries()) {
-        try {
-          if (type === 'newHeads') {
-            await this.wsChannel.unsubscribeNewHeads();
-          } else {
-            await this.wsChannel.unsubscribe(subId);
-          }
-        } catch (error) {
-          this.logger.error(`Error unsubscribing from ${type}:`, error);
-        }
-      }
-    } catch (error) {
-      this.logger.error('Error unsubscribing:', error);
+    if (this.pollTimeout) {
+      clearTimeout(this.pollTimeout);
     }
 
-    // Disconnect WebSocket
-    try {
-      this.wsChannel.disconnect();
-    } catch (error) {
-      this.logger.error('Error disconnecting WebSocket:', error);
-    }
-
-    // Close database pool
     try {
       await this.pool.end();
     } catch (error) {
@@ -957,5 +859,66 @@ export class StarknetIndexer {
     }
 
     return undefined;
+  }
+
+  private isBlockWithNumber(
+    block: any
+  ): block is { block_number: number; block_hash: string; parent_hash: string; timestamp: number } {
+    return block && typeof block.block_number === 'number' && typeof block.block_hash === 'string';
+  }
+
+  private async pollLatestBlock() {
+    if (!this.started || !this.provider) {
+      this.pollTimeout = setTimeout(() => this.pollLatestBlock(), POLL_INTERVAL);
+      return;
+    }
+
+    try {
+      const latestBlock = await this.provider.getBlock('latest');
+
+      if (!this.isBlockWithNumber(latestBlock)) {
+        this.pollTimeout = setTimeout(() => this.pollLatestBlock(), POLL_INTERVAL);
+        this.logger.warn('Failed to fetch latest block or block is pending');
+        return;
+      }
+
+      if (await this.checkIsBlockProcessed(latestBlock.block_number)) {
+        this.pollTimeout = setTimeout(() => this.pollLatestBlock(), POLL_INTERVAL);
+        this.logger.debug(`Skipping block #${latestBlock.block_number} - already processed`);
+        return;
+      }
+
+      const blockData = {
+        block_number: latestBlock.block_number,
+        block_hash: latestBlock.block_hash,
+        parent_hash: latestBlock.parent_hash,
+        timestamp: latestBlock.timestamp,
+      };
+
+      if (this.isProcessingHistoricalBlocks) {
+        this.logger.info(`Queuing block #${blockData.block_number} for later processing`);
+        this.blockQueue.push(blockData);
+      } else {
+        if (this.cursor && blockData.block_number > this.cursor.blockNumber) {
+          this.logger.info(`Processing new block #${blockData.block_number}`);
+          await this.processNewHead(blockData);
+        } else {
+          this.logger.debug(`Skipping block #${blockData.block_number} - already processed`);
+        }
+      }
+    } catch (error) {
+      this.logger.error('Error polling latest block: ', error);
+    }
+
+    // Schedule next poll
+    this.pollTimeout = setTimeout(() => this.pollLatestBlock(), POLL_INTERVAL);
+  }
+
+  private async checkIsBlockProcessed(blockNumber: number): Promise<boolean> {
+    const result = await this.pool.query(
+      `SELECT EXISTS (SELECT 1 FROM blocks WHERE number = $1) AS "exists"`,
+      [blockNumber]
+    );
+    return result.rows[0].exists;
   }
 }
