@@ -194,7 +194,8 @@ export class StarknetIndexer {
         this.logger.info('Code: ', event.code);
 
         await this.withErrorHandling('Reconnecting WebSocket', async () => {
-          await this.wsChannel.reconnect();
+          this.wsChannel.reconnect();
+          await this.wsChannel.waitForConnection();
           await this.wsChannel.subscribeNewHeads();
           this.logger.info('Successfully reconnected');
         });
@@ -798,7 +799,18 @@ export class StarknetIndexer {
 
     try {
       const fetchStart = Date.now();
-      const blockEvents = await this.fetchEvents(fromBlock, toBlock);
+
+      const blockEvents = await this.withExponentialBackoff(
+        `Fetch events for blocks ${fromBlock} to ${toBlock}`,
+        async () => {
+          const events = await this.fetchEvents(fromBlock, toBlock);
+          if (!events || events.length === 0) {
+            throw new Error(`No events returned for blocks ${fromBlock} to ${toBlock}`);
+          }
+          return events;
+        }
+      );
+
       const fetchDuration = Date.now() - fetchStart;
 
       if (!blockEvents || blockEvents.length === 0) {
@@ -927,5 +939,37 @@ export class StarknetIndexer {
       [blockNumber]
     );
     return result.rows[0].exists;
+  }
+
+  private async withExponentialBackoff<T>(
+    operation: string,
+    fn: () => Promise<T>,
+    maxRetries: number = 5,
+    initialDelay: number = 500
+  ): Promise<T | undefined> {
+    let retries = 0;
+    let delay = initialDelay;
+
+    while (retries < maxRetries) {
+      try {
+        return await fn();
+      } catch (error) {
+        retries++;
+        if (retries === maxRetries) {
+          this.logger.error(`${operation} failed after ${maxRetries} retries:`, error);
+          return undefined;
+        }
+
+        this.logger.warn(
+          `${operation} failed, retrying in ${delay}ms (attempt ${retries}/${maxRetries}):`,
+          error
+        );
+
+        await new Promise((resolve) => setTimeout(resolve, delay));
+        delay = Math.min(delay * 2, 30000); // Double the delay, max 30 seconds
+      }
+    }
+
+    return undefined;
   }
 }
