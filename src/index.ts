@@ -464,9 +464,6 @@ export class StarknetIndexer {
       ) {
         this.logger.info(`Detected reorg at block #${blockData.block_number}`);
         await this.handleReorg(blockData.block_number);
-      } else {
-        this.logger.debug(`Skipping block #${blockData.block_number} - already processed`);
-        return;
       }
     }
 
@@ -903,12 +900,8 @@ export class StarknetIndexer {
         this.logger.info(`Queuing block #${blockData.block_number} for later processing`);
         this.blockQueue.push(blockData);
       } else {
-        if (this.cursor && blockData.block_number > this.cursor.blockNumber) {
-          this.logger.info(`Processing new block #${blockData.block_number}`);
-          await this.processNewHead(blockData);
-        } else {
-          this.logger.debug(`Skipping block #${blockData.block_number} - already processed`);
-        }
+        this.logger.info(`Processing new block #${blockData.block_number}`);
+        await this.processNewHead(blockData);
       }
     } catch (error) {
       this.logger.error('Error polling latest block:', error);
