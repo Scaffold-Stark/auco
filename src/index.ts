@@ -103,12 +103,16 @@ interface QueuedBlock {
   timestamp: number;
 }
 
+interface FailedBlock extends QueuedBlock {
+  retryCount: number;
+  lastError?: string;
+  lastAttempt?: number;
+}
+
 interface Cursor {
   blockNumber: number;
   blockHash: string;
 }
-
-const POLL_INTERVAL = 2000;
 
 export class StarknetIndexer {
   private pool: Pool;
@@ -122,6 +126,13 @@ export class StarknetIndexer {
   private cursor: Cursor | null = null;
   private logger: Logger;
   private pollTimeout?: NodeJS.Timeout;
+
+  private failedBlocks: FailedBlock[] = [];
+  private retryTimeout?: NodeJS.Timeout;
+  private readonly MAX_RETRIES = 5;
+  private readonly RETRY_DELAY = 5000; // 5 seconds
+  private readonly RETRY_INTERVAL = 10000; // 10 seconds between retry checks
+  private readonly POLL_INTERVAL = 2000;
 
   constructor(private config: IndexerConfig) {
     this.logger = config.logger || new ConsoleLogger(config.logLevel);
@@ -443,7 +454,9 @@ export class StarknetIndexer {
     const targetBlock = this.config.startingBlockNumber || 0;
 
     this.started = true;
+
     this.pollLatestBlock();
+    this.startRetryProcess();
 
     if (targetBlock < currentBlock && this.provider) {
       this.isProcessingHistoricalBlocks = true;
@@ -467,20 +480,24 @@ export class StarknetIndexer {
       }
     }
 
-    await this.withTransaction(
-      'Processing block',
-      async (client) => {
-        await this.insertBlock(blockData, client);
+    try {
+      await this.withTransaction(
+        'Processing block',
+        async (client) => {
+          await this.insertBlock(blockData, client);
+          await this.updateCursor(blockData.block_number, blockData.block_hash, client);
+          this.logger.info(`Successfully processed block #${blockData.block_number}`);
 
-        await this.updateCursor(blockData.block_number, blockData.block_hash, client);
-        this.logger.info(`Successfully processed block #${blockData.block_number}`);
-
-        if (this.provider) {
-          await this.processBlockEvents(blockData.block_number, blockData.block_number, client);
-        }
-      },
-      { blockNumber: blockData.block_number }
-    );
+          if (this.provider) {
+            await this.processBlockEvents(blockData.block_number, blockData.block_number, client);
+          }
+        },
+        { blockNumber: blockData.block_number }
+      );
+    } catch (error) {
+      this.logger.error(`Failed to process block #${blockData.block_number}:`, error);
+      this.addFailedBlock(blockData, error);
+    }
   }
 
   // Handle chain reorgs
@@ -516,6 +533,9 @@ export class StarknetIndexer {
 
     if (this.pollTimeout) {
       clearTimeout(this.pollTimeout);
+    }
+    if (this.retryTimeout) {
+      clearTimeout(this.retryTimeout);
     }
 
     try {
@@ -621,6 +641,11 @@ export class StarknetIndexer {
       // Pre-fetch all blocks and events before starting transaction
       const blocks: any[] = [];
       for (let currentBlock = blockNumber; currentBlock <= chunkEndBlock; currentBlock++) {
+        if (await this.checkIsBlockProcessed(currentBlock)) {
+          this.logger.debug(`[${TAG}] Skipping block #${currentBlock} - already processed`);
+          continue;
+        }
+
         const blockFetchStart = Date.now();
         const block = await this.provider?.getBlock(currentBlock);
         const fetchDuration = Date.now() - blockFetchStart;
@@ -865,7 +890,7 @@ export class StarknetIndexer {
   }
 
   private scheduleNextPoll(): void {
-    this.pollTimeout = setTimeout(() => this.pollLatestBlock(), POLL_INTERVAL);
+    this.pollTimeout = setTimeout(() => this.pollLatestBlock(), this.POLL_INTERVAL);
   }
 
   private async pollLatestBlock() {
@@ -897,6 +922,11 @@ export class StarknetIndexer {
       };
 
       if (this.isProcessingHistoricalBlocks) {
+        if (this.blockQueue.some((block) => block.block_number === blockData.block_number)) {
+          this.logger.debug(`Skipping block #${blockData.block_number} - already in queue`);
+          this.scheduleNextPoll();
+          return;
+        }
         this.logger.info(`Queuing block #${blockData.block_number} for later processing`);
         this.blockQueue.push(blockData);
       } else {
@@ -916,5 +946,82 @@ export class StarknetIndexer {
       [blockNumber]
     );
     return result.rows[0].exists;
+  }
+
+  private addFailedBlock(blockData: QueuedBlock, error: any): void {
+    const existingFailedBlock = this.failedBlocks.find(
+      (b) => b.block_number === blockData.block_number
+    );
+    if (existingFailedBlock) {
+      existingFailedBlock.retryCount++;
+      existingFailedBlock.lastError = error?.message || String(error);
+      existingFailedBlock.lastAttempt = Date.now();
+    } else {
+      this.failedBlocks.push({
+        ...blockData,
+        retryCount: 1,
+        lastError: error?.message || String(error),
+        lastAttempt: Date.now(),
+      });
+    }
+    this.logger.warn(
+      `Added block #${blockData.block_number} to failed blocks queue. Retry count: ${
+        existingFailedBlock?.retryCount || 1
+      }`
+    );
+  }
+
+  // Retry previously failed blocks when the indexer starts.
+  // Conditions for retrying:
+  // - Block has not been successfully processed.
+  // - Retry attempts are below the maximum allowed.
+  // - Block age exceeds the configured retry delay.
+  // - Block number is smaller than the latest known block.
+  private async retryFailedBlocks(): Promise<void> {
+    if (this.failedBlocks.length === 0) return;
+
+    const latestBlock = await this.provider!.getBlock('latest');
+
+    const now = Date.now();
+
+    const blocksToRetry = this.failedBlocks.filter((block) => {
+      const timeSinceLastAttempt = now - (block.lastAttempt || 0);
+      return (
+        block.retryCount <= this.MAX_RETRIES &&
+        timeSinceLastAttempt >= this.RETRY_DELAY &&
+        block.block_number < latestBlock.block_number
+      );
+    });
+
+    if (blocksToRetry.length === 0) return;
+
+    this.logger.info(`Attempting to retry ${blocksToRetry.length} failed blocks`);
+
+    for (const block of blocksToRetry) {
+      try {
+        await this.processHistoricalBlocks(block.block_number, block.block_number);
+        // Remove from failed blocks if successful
+        this.failedBlocks = this.failedBlocks.filter((b) => b.block_number !== block.block_number);
+      } catch (error) {
+        this.logger.error(`Retry failed for block #${block.block_number}:`, error);
+        // The block will remain in failedBlocks with updated retry count
+      }
+    }
+  }
+
+  private startRetryProcess(): void {
+    const retryProcess = async () => {
+      if (!this.started) return;
+
+      try {
+        await this.retryFailedBlocks();
+      } catch (error) {
+        this.logger.error('Error in retry process:', error);
+      }
+
+      this.retryTimeout = setTimeout(retryProcess, this.RETRY_INTERVAL);
+    };
+
+    retryProcess();
   }
 }
