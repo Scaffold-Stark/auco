@@ -454,9 +454,7 @@ export class StarknetIndexer {
     const targetBlock = this.config.startingBlockNumber || 0;
 
     this.started = true;
-
     this.pollLatestBlock();
-    this.startRetryProcess();
 
     if (targetBlock < currentBlock && this.provider) {
       this.isProcessingHistoricalBlocks = true;
