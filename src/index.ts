@@ -536,6 +536,7 @@ export class StarknetIndexer {
     }
     if (this.retryTimeout) {
       clearTimeout(this.retryTimeout);
+      this.retryTimeout = undefined;
     }
 
     try {
@@ -969,6 +970,11 @@ export class StarknetIndexer {
         existingFailedBlock?.retryCount || 1
       }`
     );
+
+    // Start retry process if it's not already running
+    if (!this.retryTimeout) {
+      this.startRetryProcess();
+    }
   }
 
   // Retry previously failed blocks when the indexer starts.
@@ -1019,7 +1025,14 @@ export class StarknetIndexer {
         this.logger.error('Error in retry process:', error);
       }
 
-      this.retryTimeout = setTimeout(retryProcess, this.RETRY_INTERVAL);
+      // Only schedule next retry if there are failed blocks
+      if (this.failedBlocks.length > 0) {
+        this.retryTimeout = setTimeout(retryProcess, this.RETRY_INTERVAL);
+      } else {
+        this.logger.debug('No failed blocks to retry, stopping retry process');
+        clearTimeout(this.retryTimeout);
+        this.retryTimeout = undefined;
+      }
     };
 
     retryProcess();
