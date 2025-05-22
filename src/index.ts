@@ -103,12 +103,6 @@ interface QueuedBlock {
   timestamp: number;
 }
 
-interface FailedBlock extends QueuedBlock {
-  retryCount: number;
-  lastError?: string;
-  lastAttempt?: number;
-}
-
 interface Cursor {
   blockNumber: number;
   blockHash: string;
@@ -127,10 +121,8 @@ export class StarknetIndexer {
   private logger: Logger;
   private pollTimeout?: NodeJS.Timeout;
 
-  private failedBlocks: FailedBlock[] = [];
+  private failedBlocks: number[] = [];
   private retryTimeout?: NodeJS.Timeout;
-  private readonly MAX_RETRIES = 5;
-  private readonly RETRY_DELAY = 5000; // 5 seconds
   private readonly RETRY_INTERVAL = 10000; // 10 seconds between retry checks
   private readonly POLL_INTERVAL = 2000;
 
@@ -488,6 +480,12 @@ export class StarknetIndexer {
 
           if (this.provider) {
             await this.processBlockEvents(blockData.block_number, blockData.block_number, client);
+          }
+
+          if (this.failedBlocks.length > 0 && this.failedBlocks.includes(blockData.block_number)) {
+            this.failedBlocks = this.failedBlocks.filter(
+              (block) => block !== blockData.block_number
+            );
           }
         },
         { blockNumber: blockData.block_number }
@@ -947,27 +945,11 @@ export class StarknetIndexer {
     return result.rows[0].exists;
   }
 
-  private addFailedBlock(blockData: QueuedBlock, error: any): void {
-    const existingFailedBlock = this.failedBlocks.find(
-      (b) => b.block_number === blockData.block_number
-    );
-    if (existingFailedBlock) {
-      existingFailedBlock.retryCount++;
-      existingFailedBlock.lastError = error?.message || String(error);
-      existingFailedBlock.lastAttempt = Date.now();
-    } else {
-      this.failedBlocks.push({
-        ...blockData,
-        retryCount: 1,
-        lastError: error?.message || String(error),
-        lastAttempt: Date.now(),
-      });
+  private addFailedBlock(blockData: QueuedBlock, _error: any): void {
+    if (!this.failedBlocks.includes(blockData.block_number)) {
+      this.failedBlocks.push(blockData.block_number);
+      this.logger.warn(`Added block #${blockData.block_number} to failed blocks queue`);
     }
-    this.logger.warn(
-      `Added block #${blockData.block_number} to failed blocks queue. Retry count: ${
-        existingFailedBlock?.retryCount || 1
-      }`
-    );
 
     // Start retry process if it's not already running
     if (!this.retryTimeout) {
@@ -975,40 +957,25 @@ export class StarknetIndexer {
     }
   }
 
-  // Retry previously failed blocks when the indexer starts.
-  // Conditions for retrying:
-  // - Block has not been successfully processed.
-  // - Retry attempts are below the maximum allowed.
-  // - Block age exceeds the configured retry delay.
-  // - Block number is smaller than the latest known block.
   private async retryFailedBlocks(): Promise<void> {
     if (this.failedBlocks.length === 0) return;
 
     const latestBlock = await this.provider!.getBlock('latest');
-
-    const now = Date.now();
-
-    const blocksToRetry = this.failedBlocks.filter((block) => {
-      const timeSinceLastAttempt = now - (block.lastAttempt || 0);
-      return (
-        block.retryCount <= this.MAX_RETRIES &&
-        timeSinceLastAttempt >= this.RETRY_DELAY &&
-        block.block_number < latestBlock.block_number
-      );
-    });
+    const blocksToRetry = this.failedBlocks.filter(
+      (blockNumber) => blockNumber < latestBlock.block_number
+    );
 
     if (blocksToRetry.length === 0) return;
 
     this.logger.info(`Attempting to retry ${blocksToRetry.length} failed blocks`);
 
-    for (const block of blocksToRetry) {
+    for (const blockNumber of blocksToRetry) {
       try {
-        await this.processHistoricalBlocks(block.block_number, block.block_number);
+        await this.processHistoricalBlocks(blockNumber, blockNumber);
         // Remove from failed blocks if successful
-        this.failedBlocks = this.failedBlocks.filter((b) => b.block_number !== block.block_number);
+        this.failedBlocks = this.failedBlocks.filter((b) => b !== blockNumber);
       } catch (error) {
-        this.logger.error(`Retry failed for block #${block.block_number}:`, error);
-        // The block will remain in failedBlocks with updated retry count
+        this.logger.error(`Retry failed for block #${blockNumber}:`, error);
       }
     }
   }
