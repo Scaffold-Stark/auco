@@ -693,12 +693,16 @@ export class StarknetIndexer {
             this.logger.info(
               `[${TAG}] Inserted ${blocks.length} blocks in ${Date.now() - insertStart}ms`
             );
-          }
 
-          // Process events
-          const eventsStart = Date.now();
-          await this.processBlockEvents(blockNumber, chunkEndBlock, client);
-          this.logger.info(`[${TAG}] Events processed in ${Date.now() - eventsStart}ms`);
+            // Process events
+            const eventsStart = Date.now();
+            await this.processBlockEvents(blockNumber, chunkEndBlock, client);
+            this.logger.info(`[${TAG}] Events processed in ${Date.now() - eventsStart}ms`);
+          } else {
+            this.logger.info(
+              `[${TAG}] Skipping blocks ${blockNumber} to ${chunkEndBlock} - already processed`
+            );
+          }
         }
       );
     }
