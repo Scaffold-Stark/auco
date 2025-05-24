@@ -10,6 +10,7 @@ import {
 import { Pool, PoolClient } from 'pg';
 import { EventToPrimitiveType } from './types/abi-wan-helpers';
 import { ExtractAbiEventNames } from 'abi-wan-kanabi/kanabi';
+import { groupConsecutiveBlocks } from './utils/blockUtils';
 
 export enum LogLevel {
   DEBUG = 'debug',
@@ -693,12 +694,22 @@ export class StarknetIndexer {
             this.logger.info(
               `[${TAG}] Inserted ${blocks.length} blocks in ${Date.now() - insertStart}ms`
             );
-          }
+            const eventsStart = Date.now();
 
-          // Process events
-          const eventsStart = Date.now();
-          await this.processBlockEvents(blockNumber, chunkEndBlock, client);
-          this.logger.info(`[${TAG}] Events processed in ${Date.now() - eventsStart}ms`);
+            if (blocks.length < chunkSize) {
+              const blockRanges = groupConsecutiveBlocks(blocks.map((block) => block.block_number));
+              for (const range of blockRanges) {
+                await this.processBlockEvents(range.from, range.to, client);
+              }
+            } else {
+              await this.processBlockEvents(blockNumber, chunkEndBlock, client);
+            }
+            this.logger.info(`[${TAG}] Events processed in ${Date.now() - eventsStart}ms`);
+          } else {
+            this.logger.info(
+              `[${TAG}] Skipping blocks ${blockNumber} to ${chunkEndBlock} - already processed`
+            );
+          }
         }
       );
     }
