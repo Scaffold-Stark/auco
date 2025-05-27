@@ -128,9 +128,8 @@ export class StarknetIndexer {
   private failedBlocks: number[] = [];
   private retryTimeout?: NodeJS.Timeout;
   private readonly RETRY_INTERVAL = 10000; // 10 seconds between retry checks
-  private readonly POLL_INTERVAL = 2000;
-
   private readonly reconnectDelay: number = 1000;
+
   private wsUrl: string;
 
   constructor(private config: IndexerConfig) {
@@ -204,6 +203,7 @@ export class StarknetIndexer {
         this.logger.info('Code: ', event.code);
 
         await this.withExponentialBackoff('Reconnecting WebSocket', async () => {
+          await new Promise((resolve) => setTimeout(resolve, this.reconnectDelay));
           this.logger.info('Reconnecting WebSocket...');
           this.wsChannel = new WebSocketChannel({
             nodeUrl: this.wsUrl,
