@@ -6,6 +6,7 @@ import {
   hash,
   Abi,
   EmittedEvent,
+  WebSocketChannel,
 } from 'starknet';
 import { Pool, PoolClient } from 'pg';
 import { EventToPrimitiveType } from './types/abi-wan-helpers';
@@ -61,6 +62,7 @@ export class ConsoleLogger implements Logger {
 
 export interface IndexerConfig {
   rpcNodeUrl: string;
+  wsNodeUrl: string;
   databaseUrl: string;
   startingBlockNumber?: number;
   contractAddresses?: string[];
@@ -110,6 +112,7 @@ interface Cursor {
 }
 
 export class StarknetIndexer {
+  private wsChannel: WebSocketChannel;
   private pool: Pool;
   private eventHandlers: Map<string, EventHandlerConfig[]> = new Map();
   private started: boolean = false;
@@ -125,10 +128,18 @@ export class StarknetIndexer {
   private failedBlocks: number[] = [];
   private retryTimeout?: NodeJS.Timeout;
   private readonly RETRY_INTERVAL = 10000; // 10 seconds between retry checks
-  private readonly POLL_INTERVAL = 2000;
+  private readonly reconnectDelay: number = 1000;
+
+  private wsUrl: string;
 
   constructor(private config: IndexerConfig) {
     this.logger = config.logger || new ConsoleLogger(config.logLevel);
+
+    this.wsUrl = config.wsNodeUrl;
+
+    this.wsChannel = new WebSocketChannel({
+      nodeUrl: config.wsNodeUrl,
+    });
 
     this.pool = new Pool({
       connectionString: config.databaseUrl,
@@ -145,6 +156,68 @@ export class StarknetIndexer {
     } catch (error) {
       this.logger.error('Failed to initialize RPC provider:', error);
     }
+
+    this.setupEventHandlers();
+  }
+
+  private setupEventHandlers() {
+    this.wsChannel.onNewHeads = async (data) => {
+      await this.withErrorHandling(
+        'Processing new head',
+        async () => {
+          const blockData = {
+            block_number: data.result.block_number,
+            block_hash: data.result.block_hash,
+            parent_hash: data.result.parent_hash,
+            timestamp: data.result.timestamp,
+          };
+
+          if (this.isProcessingHistoricalBlocks) {
+            this.logger.info(`Queuing block #${blockData.block_number} for later processing`);
+            this.blockQueue.push(blockData);
+          } else {
+            this.logger.info(`Processing new block #${blockData.block_number}`);
+            await this.processNewHead(blockData);
+          }
+        },
+        { blockNumber: data.result.block_number }
+      );
+    };
+
+    this.wsChannel.onReorg = async (data) => {
+      const reorgPoint = data.result?.starting_block_number;
+      if (reorgPoint) {
+        this.logger.info(`Handling reorg from block #${reorgPoint}`);
+        await this.handleReorg(reorgPoint);
+      }
+    };
+
+    this.wsChannel.onError = (error) => {
+      this.logger.error('WebSocket error:', error);
+    };
+
+    this.wsChannel.onClose = async (event) => {
+      if (this.started) {
+        this.logger.info('Connection closed, attempting to reconnect...');
+        this.logger.info('Reason: ', event.reason);
+        this.logger.info('Code: ', event.code);
+
+        await this.withExponentialBackoff('Reconnecting WebSocket', async () => {
+          await new Promise((resolve) => setTimeout(resolve, this.reconnectDelay));
+          this.logger.info('Reconnecting WebSocket...');
+          this.wsChannel = new WebSocketChannel({
+            nodeUrl: this.wsUrl,
+          });
+          this.logger.info('Reconnecting Websocket Successfully');
+          this.setupEventHandlers();
+          this.logger.info('Setup Event Handlers Successfully');
+          await this.wsChannel.waitForConnection();
+          this.logger.info('Wait For Connection Successfully');
+          await this.wsChannel.subscribeNewHeads();
+          this.logger.info('Subscribe New Heads Successfully');
+        });
+      }
+    };
   }
 
   private getEventSelector(eventName: string): string {
@@ -446,8 +519,24 @@ export class StarknetIndexer {
     const currentBlock = this.provider ? await this.provider.getBlockNumber() : 0;
     const targetBlock = this.config.startingBlockNumber || 0;
 
-    this.started = true;
-    this.pollLatestBlock();
+    try {
+      this.logger.info('[WebSocket] Connecting to node...');
+      await this.wsChannel.waitForConnection();
+      this.logger.info('[WebSocket] Successfully connected');
+    } catch (error) {
+      this.logger.error('[WebSocket] Failed to establish connection:', error);
+      throw error;
+    }
+
+    try {
+      this.logger.info('[WebSocket] Subscribing to new heads...');
+      await this.wsChannel.subscribeNewHeads();
+      this.started = true;
+      this.logger.info('[WebSocket] Successfully subscribed to new heads');
+    } catch (error) {
+      this.logger.error('[WebSocket] Failed to subscribe to new heads:', error);
+      throw error;
+    }
 
     if (targetBlock < currentBlock && this.provider) {
       this.isProcessingHistoricalBlocks = true;
@@ -889,63 +978,6 @@ export class StarknetIndexer {
     }
 
     return undefined;
-  }
-
-  private isBlockWithNumber(
-    block: any
-  ): block is { block_number: number; block_hash: string; parent_hash: string; timestamp: number } {
-    return block && typeof block.block_number === 'number' && typeof block.block_hash === 'string';
-  }
-
-  private scheduleNextPoll(): void {
-    this.pollTimeout = setTimeout(() => this.pollLatestBlock(), this.POLL_INTERVAL);
-  }
-
-  private async pollLatestBlock() {
-    if (!this.started || !this.provider) {
-      this.scheduleNextPoll();
-      return;
-    }
-
-    try {
-      const latestBlock = await this.provider.getBlock('latest');
-
-      if (!this.isBlockWithNumber(latestBlock)) {
-        this.scheduleNextPoll();
-        this.logger.warn('Failed to fetch latest block or block is pending');
-        return;
-      }
-
-      if (await this.checkIsBlockProcessed(latestBlock.block_number)) {
-        this.scheduleNextPoll();
-        this.logger.debug(`Skipping block #${latestBlock.block_number} - already processed`);
-        return;
-      }
-
-      const blockData = {
-        block_number: latestBlock.block_number,
-        block_hash: latestBlock.block_hash,
-        parent_hash: latestBlock.parent_hash,
-        timestamp: latestBlock.timestamp,
-      };
-
-      if (this.isProcessingHistoricalBlocks) {
-        if (this.blockQueue.some((block) => block.block_number === blockData.block_number)) {
-          this.logger.debug(`Skipping block #${blockData.block_number} - already in queue`);
-          this.scheduleNextPoll();
-          return;
-        }
-        this.logger.info(`Queuing block #${blockData.block_number} for later processing`);
-        this.blockQueue.push(blockData);
-      } else {
-        this.logger.info(`Processing new block #${blockData.block_number}`);
-        await this.processNewHead(blockData);
-      }
-    } catch (error) {
-      this.logger.error('Error polling latest block:', error);
-    }
-
-    this.scheduleNextPoll();
   }
 
   private async checkIsBlockProcessed(blockNumber: number): Promise<boolean> {
