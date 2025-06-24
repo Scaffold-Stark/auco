@@ -22,7 +22,7 @@ yarn install
 
 ## Usage Example
 
-See [`example/basic.ts`](./example/basic.ts) for a minimal working example.
+See [`example/index.ts`](./example/index.ts) for a minimal working example.
 
 ```typescript
 import { StarknetIndexer, LogLevel } from '../src/index';
@@ -52,12 +52,12 @@ indexer.start();
 ## Running the Example
 
 1. Made your to setup your local postgres database
-2. Edit `example/basic.ts` with your node URLs and contract address if needed.
-3. Edit `example/basic.ts` with your postgres database connection string if needed.
+2. Edit `example/index.ts` with your node URLs and contract address if needed.
+3. Edit `example/index.ts` with your postgres database connection string if needed.
 4. Run:
 
 ```bash
-npx ts-node example/basic.ts
+npx ts-node example/index.ts
 ```
 
 ## Running Tests
