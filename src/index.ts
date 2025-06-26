@@ -69,6 +69,8 @@ export interface IndexerConfig {
   cursorKey?: string;
   logLevel?: LogLevel;
   logger?: Logger;
+  reconnectDelayInMs?: number;
+  retryIntervalInMs?: number;
 }
 
 export type StarknetEvent<TAbi extends Abi, TEventName extends ExtractAbiEventNames<TAbi>> = {
@@ -127,12 +129,15 @@ export class StarknetIndexer {
 
   private failedBlocks: number[] = [];
   private retryTimeout?: NodeJS.Timeout;
-  private readonly RETRY_INTERVAL = 10000; // 10 seconds between retry checks
-  private readonly reconnectDelay: number = 1000;
+  private readonly RETRY_INTERVAL: number; // 10 seconds between retry checks
+  private readonly reconnectDelay: number;
 
   private wsUrl: string;
 
   constructor(private config: IndexerConfig) {
+    this.reconnectDelay = config.reconnectDelayInMs || 1000;
+    this.RETRY_INTERVAL = config.retryIntervalInMs || 10000;
+
     this.logger = config.logger || new ConsoleLogger(config.logLevel);
 
     this.wsUrl = config.wsNodeUrl;
