@@ -71,6 +71,7 @@ export interface IndexerConfig {
   logger?: Logger;
   reconnectDelayInMs?: number;
   retryIntervalInMs?: number;
+  chunkSize?: number;
 }
 
 export type StarknetEvent<TAbi extends Abi, TEventName extends ExtractAbiEventNames<TAbi>> = {
@@ -131,12 +132,14 @@ export class StarknetIndexer {
   private retryTimeout?: NodeJS.Timeout;
   private readonly RETRY_INTERVAL: number; // 10 seconds between retry checks
   private readonly reconnectDelay: number;
+  private readonly CHUNK_SIZE: number;
 
   private wsUrl: string;
 
   constructor(private config: IndexerConfig) {
     this.reconnectDelay = config.reconnectDelayInMs || 1000;
     this.RETRY_INTERVAL = config.retryIntervalInMs || 10000;
+    this.CHUNK_SIZE = config.chunkSize || 1000;
 
     this.logger = config.logger || new ConsoleLogger(config.logLevel);
 
@@ -720,7 +723,7 @@ export class StarknetIndexer {
       const response = await this.provider.getEvents({
         from_block: { block_number: fromBlock },
         to_block: { block_number: toBlock },
-        chunk_size: 1000,
+        chunk_size: this.CHUNK_SIZE,
         continuation_token: continuationToken,
       });
 
@@ -732,7 +735,7 @@ export class StarknetIndexer {
   }
 
   private async processHistoricalBlocks(fromBlock: number, toBlock: number): Promise<void> {
-    const chunkSize = 100;
+    const chunkSize = this.CHUNK_SIZE;
     const TAG = 'processHistoricalBlocks';
 
     for (let blockNumber = fromBlock; blockNumber <= toBlock; blockNumber += chunkSize) {
