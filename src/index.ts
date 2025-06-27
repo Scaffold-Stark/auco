@@ -130,15 +130,16 @@ export class StarknetIndexer {
 
   private failedBlocks: number[] = [];
   private retryTimeout?: NodeJS.Timeout;
-  private readonly RETRY_INTERVAL: number; // 10 seconds between retry checks
-  private readonly reconnectDelay: number;
+
+  private readonly RETRY_INTERVAL_IN_MS: number; // 10 seconds between retry checks
+  private readonly RECONNECT_DELAY_IN_MS: number;
   private readonly CHUNK_SIZE: number;
 
   private wsUrl: string;
 
   constructor(private config: IndexerConfig) {
-    this.reconnectDelay = config.reconnectDelayInMs || 1000;
-    this.RETRY_INTERVAL = config.retryIntervalInMs || 10000;
+    this.RECONNECT_DELAY_IN_MS = config.reconnectDelayInMs || 1000;
+    this.RETRY_INTERVAL_IN_MS = config.retryIntervalInMs || 10000;
     this.CHUNK_SIZE = config.chunkSize || 1000;
 
     this.logger = config.logger || new ConsoleLogger(config.logLevel);
@@ -211,7 +212,7 @@ export class StarknetIndexer {
         this.logger.info('Code: ', event.code);
 
         await this.withExponentialBackoff('Reconnecting WebSocket', async () => {
-          await new Promise((resolve) => setTimeout(resolve, this.reconnectDelay));
+          await new Promise((resolve) => setTimeout(resolve, this.RECONNECT_DELAY_IN_MS));
           this.logger.info('Reconnecting WebSocket...');
           this.wsChannel = new WebSocketChannel({
             nodeUrl: this.wsUrl,
@@ -1054,7 +1055,7 @@ export class StarknetIndexer {
 
       // Only schedule next retry if there are failed blocks
       if (this.failedBlocks.length > 0) {
-        this.retryTimeout = setTimeout(retryProcess, this.RETRY_INTERVAL);
+        this.retryTimeout = setTimeout(retryProcess, this.RETRY_INTERVAL_IN_MS);
       } else {
         this.logger.debug('No failed blocks to retry, stopping retry process');
         clearTimeout(this.retryTimeout);
