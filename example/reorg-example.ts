@@ -5,6 +5,8 @@ import { universalErc20Abi } from '../test/constants';
 (async () => {
   const contractAddress = '0x4718F5A0FC34CC1AF16A1CDEE98FFB20C31F5CD61D6AB07201858F4287C938D';
 
+  const provider = new RpcProvider({ nodeUrl: 'http://127.0.0.1:5050' });
+
   const indexer = new StarknetIndexer({
     rpcNodeUrl: 'http://127.0.0.1:5050',
     wsNodeUrl: 'ws://127.0.0.1:5050/ws',
@@ -16,13 +18,13 @@ import { universalErc20Abi } from '../test/constants';
 
   const events: StarknetEvent<
     typeof universalErc20Abi,
-    'openzeppelin::token::erc20_v070::erc20::ERC20::Transfer'
+    'src::strk::erc20_lockable::ERC20Lockable::Transfer'
   >[] = [];
 
   indexer.onEvent({
     contractAddress,
     abi: universalErc20Abi,
-    eventName: 'openzeppelin::token::erc20_v070::erc20::ERC20::Transfer',
+    eventName: 'src::strk::erc20_lockable::ERC20Lockable::Transfer',
     handler: async (event) => {
       console.log('Received event', event);
       events.push(event);
@@ -30,9 +32,6 @@ import { universalErc20Abi } from '../test/constants';
   });
 
   await indexer.start();
-
-  // use starknet.js to send a transfer event
-  const provider = new RpcProvider({ nodeUrl: 'http://127.0.0.1:5050' });
 
   const strkContract = new Contract(universalErc20Abi, contractAddress, provider);
 
