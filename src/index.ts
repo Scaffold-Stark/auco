@@ -64,7 +64,7 @@ export interface IndexerConfig {
   rpcNodeUrl: string;
   wsNodeUrl: string;
   databaseUrl: string;
-  startingBlockNumber?: number;
+  startingBlockNumber: number | 'latest';
   contractAddresses?: string[];
   cursorKey?: string;
   logLevel?: LogLevel;
@@ -440,7 +440,13 @@ export class StarknetIndexer {
       );
 
       if (result.rows.length === 0) {
-        const startingBlock = this.config.startingBlockNumber || 0;
+        let startingBlock: number;
+        if (this.config.startingBlockNumber === 'latest') {
+          if (!this.provider) throw new Error('Provider not initialized');
+          startingBlock = await this.provider.getBlockNumber();
+        } else {
+          startingBlock = this.config.startingBlockNumber;
+        }
         this.cursor = { blockNumber: startingBlock, blockHash: '' };
 
         await client.query(
@@ -517,7 +523,12 @@ export class StarknetIndexer {
     this.logger.info(`Starting from block ${this.cursor?.blockNumber}`);
 
     const currentBlock = this.provider ? await this.provider.getBlockNumber() : 0;
-    const targetBlock = this.config.startingBlockNumber || 0;
+    let targetBlock: number;
+    if (this.config.startingBlockNumber === 'latest') {
+      targetBlock = currentBlock;
+    } else {
+      targetBlock = this.config.startingBlockNumber;
+    }
 
     try {
       this.logger.info('[WebSocket] Connecting to node...');
