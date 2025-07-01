@@ -400,7 +400,7 @@ export class StarknetIndexer {
       // in blocks table, composite primary key with both number and hash
       await client.query(`
         CREATE TABLE IF NOT EXISTS blocks (
-          number BIGINT NOT NULL,
+          number BIGINT UNIQUE NOT NULL,
           hash TEXT NOT NULL,
           parent_hash TEXT NOT NULL,
           timestamp BIGINT NOT NULL,
@@ -628,11 +628,10 @@ export class StarknetIndexer {
 
         // build queries to mark non-canonical and delete events
         while (!!deletionPointerBlockHash) {
-          // marks the forked block non-canonical
+          // deletes the forked block from the blocks table
           await client.query(
             `
-            UPDATE blocks
-            SET is_canonical = FALSE
+            DELETE FROM blocks
             WHERE hash = $1
           `,
             [deletionPointerBlockHash]
