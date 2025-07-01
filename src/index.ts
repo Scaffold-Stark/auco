@@ -397,10 +397,11 @@ export class StarknetIndexer {
   public async initializeDatabase(): Promise<number | undefined> {
     const client = await this.pool.connect();
     try {
+      // in blocks table, primary key is hash since number can be duplicated if a fork happens
       await client.query(`
         CREATE TABLE IF NOT EXISTS blocks (
-          number BIGINT PRIMARY KEY,
-          hash TEXT UNIQUE NOT NULL,
+          number BIGINT NOT NULL,
+          hash TEXT UNIQUE NOT NULL PRIMARY KEY,
           parent_hash TEXT NOT NULL,
           timestamp BIGINT NOT NULL,
           is_canonical BOOLEAN NOT NULL DEFAULT TRUE
@@ -428,6 +429,8 @@ export class StarknetIndexer {
         
         CREATE INDEX IF NOT EXISTS idx_events_block ON events(block_number);
         CREATE INDEX IF NOT EXISTS idx_events_from ON events(from_address);
+        CREATE INDEX IF NOT EXISTS idx_block_number_block_hash ON blocks(number, hash);
+        CREATE INDEX IF NOT EXISTS idx_block_hash_parent_hash ON blocks(hash, parent_hash);
       `);
 
       const result = await client.query(
