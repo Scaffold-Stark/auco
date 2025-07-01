@@ -400,25 +400,23 @@ export class StarknetIndexer {
       // in blocks table, composite primary key with both number and hash
       await client.query(`
         CREATE TABLE IF NOT EXISTS blocks (
-          number BIGINT UNIQUE NOT NULL,
-          hash TEXT NOT NULL,
+          number BIGINT PRIMARY KEY,
+          hash TEXT UNIQUE NOT NULL,
           parent_hash TEXT NOT NULL,
           timestamp BIGINT NOT NULL,
-          is_canonical BOOLEAN NOT NULL DEFAULT TRUE,
-          PRIMARY KEY (number, hash)
+          is_canonical BOOLEAN NOT NULL DEFAULT TRUE
         );
         
         CREATE TABLE IF NOT EXISTS events (
           id SERIAL PRIMARY KEY,
           block_number BIGINT NOT NULL,
-          block_hash TEXT NOT NULL,
           transaction_hash TEXT NOT NULL,
           from_address TEXT NOT NULL,
           event_index INTEGER NOT NULL,
           keys TEXT[] NOT NULL,
           data TEXT[] NOT NULL,
-          CONSTRAINT fk_block FOREIGN KEY (block_number, block_hash) 
-            REFERENCES blocks(number, hash) ON DELETE CASCADE
+          CONSTRAINT fk_block FOREIGN KEY (block_number) 
+            REFERENCES blocks(number) ON DELETE CASCADE
         );
         
         CREATE TABLE IF NOT EXISTS indexer_state (
@@ -431,8 +429,6 @@ export class StarknetIndexer {
         
         CREATE INDEX IF NOT EXISTS idx_events_block ON events(block_number);
         CREATE INDEX IF NOT EXISTS idx_events_from ON events(from_address);
-        CREATE INDEX IF NOT EXISTS idx_block_number_block_hash ON blocks(number, hash);
-        CREATE INDEX IF NOT EXISTS idx_block_hash_parent_hash ON blocks(hash, parent_hash);
       `);
 
       const result = await client.query(
