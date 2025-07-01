@@ -114,7 +114,7 @@ interface Cursor {
 export class StarknetIndexer {
   private wsChannel: WebSocketChannel;
   private pool: Pool;
-  private persistentClient?: PoolClient;
+  private client?: PoolClient;
   private eventHandlers: Map<string, EventHandlerConfig[]> = new Map();
   private started: boolean = false;
   private provider?: RpcProvider;
@@ -272,10 +272,10 @@ export class StarknetIndexer {
     fn: (client: PoolClient) => Promise<T>,
     context: Record<string, any> = {}
   ): Promise<T | undefined> {
-    if (!this.persistentClient) {
+    if (!this.client) {
       this.logger.warn('Persistent database client not initialized, attempting to connect...');
       try {
-        this.persistentClient = await this.pool.connect();
+        this.client = await this.pool.connect();
         this.logger.info('Persistent database client connected successfully');
       } catch (err) {
         this.logger.error('Failed to connect persistent database client:', err);
@@ -284,12 +284,12 @@ export class StarknetIndexer {
     }
 
     try {
-      await this.persistentClient.query('BEGIN');
-      const result = await fn(this.persistentClient);
-      await this.persistentClient.query('COMMIT');
+      await this.client.query('BEGIN');
+      const result = await fn(this.client);
+      await this.client.query('COMMIT');
       return result;
     } catch (error) {
-      await this.persistentClient.query('ROLLBACK');
+      await this.client.query('ROLLBACK');
       this.logger.error(`${operation} failed:`, { ...context, error });
       return undefined;
     }
@@ -297,8 +297,8 @@ export class StarknetIndexer {
 
   // Initialize the database schema
   public async initializeDatabase(): Promise<number | undefined> {
-    const client = this.persistentClient || (await this.pool.connect());
-    const shouldRelease = !this.persistentClient;
+    const client = this.client || (await this.pool.connect());
+    const shouldRelease = !this.client;
 
     try {
       await client.query(`
@@ -430,7 +430,7 @@ export class StarknetIndexer {
 
     // Establish persistent database connection
     this.logger.info('[Database] Establishing connection...');
-    this.persistentClient = await this.pool.connect();
+    this.client = await this.pool.connect();
     this.logger.info('[Database] Connection established');
 
     const currentBlock = this.provider ? await this.provider.getBlockNumber() : 0;
@@ -548,10 +548,10 @@ export class StarknetIndexer {
     }
 
     // Close persistent database connection
-    if (this.persistentClient) {
+    if (this.client) {
       this.logger.info('[Database] Closing connection...');
-      this.persistentClient.release();
-      this.persistentClient = undefined;
+      this.client.release();
+      this.client = undefined;
       this.logger.info('[Database] Connection closed');
     }
 
