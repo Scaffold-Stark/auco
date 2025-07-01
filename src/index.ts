@@ -397,26 +397,28 @@ export class StarknetIndexer {
   public async initializeDatabase(): Promise<number | undefined> {
     const client = await this.pool.connect();
     try {
-      // in blocks table, primary key is hash since number can be duplicated if a fork happens
+      // in blocks table, composite primary key with both number and hash
       await client.query(`
         CREATE TABLE IF NOT EXISTS blocks (
           number BIGINT NOT NULL,
-          hash TEXT UNIQUE NOT NULL PRIMARY KEY,
+          hash TEXT NOT NULL,
           parent_hash TEXT NOT NULL,
           timestamp BIGINT NOT NULL,
-          is_canonical BOOLEAN NOT NULL DEFAULT TRUE
+          is_canonical BOOLEAN NOT NULL DEFAULT TRUE,
+          PRIMARY KEY (number, hash)
         );
         
         CREATE TABLE IF NOT EXISTS events (
           id SERIAL PRIMARY KEY,
           block_number BIGINT NOT NULL,
+          block_hash TEXT NOT NULL,
           transaction_hash TEXT NOT NULL,
           from_address TEXT NOT NULL,
           event_index INTEGER NOT NULL,
           keys TEXT[] NOT NULL,
           data TEXT[] NOT NULL,
-          CONSTRAINT fk_block FOREIGN KEY (block_number) 
-            REFERENCES blocks(number) ON DELETE CASCADE
+          CONSTRAINT fk_block FOREIGN KEY (block_number, block_hash) 
+            REFERENCES blocks(number, hash) ON DELETE CASCADE
         );
         
         CREATE TABLE IF NOT EXISTS indexer_state (
@@ -607,14 +609,62 @@ export class StarknetIndexer {
     await this.withTransaction(
       'Handling reorg',
       async (client) => {
-        await client.query(
+        // find the forked block in DB
+        const forkedBlock = await client.query(
           `
-        UPDATE blocks
-        SET is_canonical = FALSE
-        WHERE number >= $1
-      `,
+          SELECT * FROM blocks
+          WHERE number = $1
+        `,
           [forkBlockNumber]
         );
+
+        if (forkedBlock.rows.length === 0) {
+          return;
+        }
+
+        // find blockhash of the forked block
+        let deletionPointerBlockHash: string | null = forkedBlock.rows[0].hash;
+        let deletionPointerBlockNumber: number | null = forkedBlock.rows[0].number;
+
+        // build queries to mark non-canonical and delete events
+        while (!!deletionPointerBlockHash) {
+          // marks the forked block non-canonical
+          await client.query(
+            `
+            UPDATE blocks
+            SET is_canonical = FALSE
+            WHERE hash = $1
+          `,
+            [deletionPointerBlockHash]
+          );
+
+          // delete all events associated with the non-canonical block
+          await client.query(
+            `
+            DELETE FROM events
+            WHERE block_number = $1 AND block_hash = $2 
+          `,
+            [deletionPointerBlockNumber, deletionPointerBlockHash]
+          );
+
+          // find next block to delete (based on parent hash)
+          // find child block of the deletion pointer block
+          const childBlock = await client.query(
+            `
+            SELECT * FROM blocks
+            WHERE parent_hash = $1
+          `,
+            [deletionPointerBlockHash]
+          );
+
+          if (childBlock.rows.length > 0) {
+            deletionPointerBlockHash = childBlock.rows[0].hash;
+            deletionPointerBlockNumber = childBlock.rows[0].number;
+          } else {
+            deletionPointerBlockHash = null;
+            deletionPointerBlockNumber = null;
+          }
+        }
 
         if (this.cursor && this.cursor.blockNumber >= forkBlockNumber) {
           await this.updateCursor(forkBlockNumber - 1, '', client);
@@ -787,9 +837,8 @@ export class StarknetIndexer {
             await client.query(`
               INSERT INTO blocks (number, hash, parent_hash, timestamp)
               VALUES ${values}
-              ON CONFLICT (number) DO UPDATE
-              SET hash = EXCLUDED.hash, 
-                  parent_hash = EXCLUDED.parent_hash, 
+              ON CONFLICT (number, hash) DO UPDATE
+              SET parent_hash = EXCLUDED.parent_hash, 
                   timestamp = EXCLUDED.timestamp, 
                   is_canonical = TRUE
             `);
@@ -955,8 +1004,8 @@ export class StarknetIndexer {
       `
         INSERT INTO blocks (number, hash, parent_hash, timestamp)
         VALUES ($1, $2, $3, $4)
-        ON CONFLICT (number) DO UPDATE
-        SET hash = $2, parent_hash = $3, timestamp = $4, is_canonical = TRUE
+        ON CONFLICT (number, hash) DO UPDATE
+        SET parent_hash = $3, timestamp = $4, is_canonical = TRUE
       `,
       [blockData.block_number, blockData.block_hash, blockData.parent_hash, timestamp]
     );
