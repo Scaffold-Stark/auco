@@ -10,7 +10,7 @@
     "lint:fix": "eslint . --ext .ts --fix",
     "format": "prettier --write \"**/*.{ts,js,json,md}\"",
     "postinstall": "npx patch-package",
-    "test": "jest --passWithNoTests"
+    "test": "jest --passWithNoTests --forceExit"
   },
   "dependencies": {
     "abi-wan-kanabi": "2.2.4",
