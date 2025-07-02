@@ -31,12 +31,11 @@ indexer.start();
 
       poolClient.query(
         `
-        INSERT INTO events (block_number, block_hash, transaction_hash, from_address, event_index, keys, data)
-        VALUES ($1, $2, $3, $4, $5, $6, $7)
+        INSERT INTO events (block_number, transaction_hash, from_address, event_index, keys, data)
+        VALUES ($1, $2, $3, $4, $5, $6)
         `,
         [
           event.block_number,
-          event.block_hash,
           event.transaction_hash,
           event.from_address,
           event.event_index,

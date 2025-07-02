@@ -623,7 +623,7 @@ export class StarknetIndexer {
         let deletionPointerBlockNumber: number | null = forkedBlock.rows[0].number;
 
         // build queries to mark non-canonical and delete events
-        while (!!deletionPointerBlockHash) {
+        while (!!deletionPointerBlockHash && !!deletionPointerBlockNumber) {
           // deletes the forked block from the blocks table
           await client.query(
             `
@@ -637,9 +637,9 @@ export class StarknetIndexer {
           await client.query(
             `
             DELETE FROM events
-            WHERE block_number = $1 AND block_hash = $2 
+            WHERE block_number = $1
           `,
-            [deletionPointerBlockNumber, deletionPointerBlockHash]
+            [deletionPointerBlockNumber]
           );
 
           // find next block to delete (based on parent hash)
@@ -832,8 +832,9 @@ export class StarknetIndexer {
             await client.query(`
               INSERT INTO blocks (number, hash, parent_hash, timestamp)
               VALUES ${values}
-              ON CONFLICT (number, hash) DO UPDATE
-              SET parent_hash = EXCLUDED.parent_hash, 
+              ON CONFLICT (number) DO UPDATE
+              SET hash = EXCLUDED.hash, 
+                  parent_hash = EXCLUDED.parent_hash, 
                   timestamp = EXCLUDED.timestamp, 
                   is_canonical = TRUE
             `);
@@ -999,8 +1000,8 @@ export class StarknetIndexer {
       `
         INSERT INTO blocks (number, hash, parent_hash, timestamp)
         VALUES ($1, $2, $3, $4)
-        ON CONFLICT (number, hash) DO UPDATE
-        SET parent_hash = $3, timestamp = $4, is_canonical = TRUE
+        ON CONFLICT (number) DO UPDATE
+        SET hash = $2, parent_hash = $3, timestamp = $4, is_canonical = TRUE
       `,
       [blockData.block_number, blockData.block_hash, blockData.parent_hash, timestamp]
     );
