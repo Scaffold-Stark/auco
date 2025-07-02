@@ -336,10 +336,10 @@ export class StarknetIndexer {
 
       const result = await client.query(
         `
-        SELECT last_block_number, last_block_hash 
-        FROM indexer_state 
-        WHERE id = 1 AND (cursor_key IS NULL OR cursor_key = $1)
-      `,
+          SELECT last_block_number, last_block_hash 
+          FROM indexer_state 
+          WHERE id = 1 AND (cursor_key IS NULL OR cursor_key = $1)
+        `,
         [this.config.cursorKey || null]
       );
 
@@ -355,9 +355,9 @@ export class StarknetIndexer {
 
         await client.query(
           `
-          INSERT INTO indexer_state (last_block_number, last_block_hash, cursor_key) 
-          VALUES ($1, $2, $3)
-        `,
+            INSERT INTO indexer_state (last_block_number, last_block_hash, cursor_key) 
+            VALUES ($1, $2, $3)
+          `,
           [startingBlock, '', this.config.cursorKey || null]
         );
 
