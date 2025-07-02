@@ -82,6 +82,13 @@ export type StarknetEvent<TAbi extends Abi, TEventName extends ExtractAbiEventNa
   parsed: EventToPrimitiveType<TAbi, TEventName>;
 };
 
+interface QueuedBlock {
+  block_number: number;
+  block_hash: string;
+  parent_hash: string;
+  timestamp: number;
+}
+
 export type EventHandler<TAbi extends Abi, TEventName extends ExtractAbiEventNames<TAbi>> = (
   event: StarknetEvent<TAbi, TEventName>,
   client: PoolClient,
@@ -99,11 +106,11 @@ interface EventHandlerConfig {
   handler: EventHandler<any, any>;
 }
 
-interface QueuedBlock {
-  block_number: number;
-  block_hash: string;
-  parent_hash: string;
-  timestamp: number;
+export type ReorgHandler = (forkedBlock: QueuedBlock) => Promise<void>;
+
+interface ReorgHandlerParams {
+  handler: ReorgHandler;
+  isOverride?: boolean;
 }
 
 interface Cursor {
@@ -115,6 +122,7 @@ export class StarknetIndexer {
   private wsChannel: WebSocketChannel;
   private pool: Pool;
   private eventHandlers: Map<string, EventHandlerConfig[]> = new Map();
+  private reorgHandler: ReorgHandler | null = null; // using dedicated variable to avoid type conflicts
   private started: boolean = false;
   private provider?: RpcProvider;
   private blockQueue: QueuedBlock[] = [];
@@ -397,6 +405,7 @@ export class StarknetIndexer {
   public async initializeDatabase(): Promise<number | undefined> {
     const client = await this.pool.connect();
     try {
+      // in blocks table, composite primary key with both number and hash
       await client.query(`
         CREATE TABLE IF NOT EXISTS blocks (
           number BIGINT PRIMARY KEY,
@@ -517,6 +526,28 @@ export class StarknetIndexer {
     this.abiMapping.set(normalizedAddress, abi);
   }
 
+  // Register an event handler for a contract address with optional event name
+  public async onReorg(params: ReorgHandlerParams): Promise<void> {
+    const { handler, isOverride } = params;
+
+    if (!handler) {
+      throw new Error('Handler is required');
+    }
+
+    if (!!this.reorgHandler) {
+      if (isOverride) {
+        this.logger.warn('Reorg handler already registered, overriding...');
+      }
+
+      // we want to be able to throw to prevent accidental errors
+      else {
+        throw new Error('Reorg handler already registered, use isOverride to override');
+      }
+    }
+
+    this.reorgHandler = handler;
+  }
+
   // Start the indexer
   public async start(): Promise<void> {
     await this.initializeDatabase();
@@ -604,17 +635,74 @@ export class StarknetIndexer {
     await this.withTransaction(
       'Handling reorg',
       async (client) => {
-        await client.query(
+        // find the forked block in DB
+        const forkedBlock = await client.query(
           `
-        UPDATE blocks
-        SET is_canonical = FALSE
-        WHERE number >= $1
-      `,
+          SELECT * FROM blocks
+          WHERE number = $1
+        `,
           [forkBlockNumber]
         );
 
+        if (forkedBlock.rows.length === 0) {
+          return;
+        }
+
+        // find blockhash of the forked block
+        let deletionPointerBlockHash: string | null = forkedBlock.rows[0].hash;
+        let deletionPointerBlockNumber: number | null = forkedBlock.rows[0].number;
+
+        // build queries to mark non-canonical and delete events
+        while (!!deletionPointerBlockHash && !!deletionPointerBlockNumber) {
+          // deletes the forked block from the blocks table
+          await client.query(
+            `
+            DELETE FROM blocks
+            WHERE hash = $1
+          `,
+            [deletionPointerBlockHash]
+          );
+
+          // delete all events associated with the non-canonical block
+          await client.query(
+            `
+            DELETE FROM events
+            WHERE block_number = $1
+          `,
+            [deletionPointerBlockNumber]
+          );
+
+          // find next block to delete (based on parent hash)
+          // find child block of the deletion pointer block
+          const childBlock = await client.query(
+            `
+            SELECT * FROM blocks
+            WHERE parent_hash = $1
+          `,
+            [deletionPointerBlockHash]
+          );
+
+          if (childBlock.rows.length > 0) {
+            deletionPointerBlockHash = childBlock.rows[0].hash;
+            deletionPointerBlockNumber = childBlock.rows[0].number;
+          } else {
+            deletionPointerBlockHash = null;
+            deletionPointerBlockNumber = null;
+          }
+        }
+
         if (this.cursor && this.cursor.blockNumber >= forkBlockNumber) {
           await this.updateCursor(forkBlockNumber - 1, '', client);
+        }
+
+        if (this.reorgHandler) {
+          const forkedBlockDataForHandler = {
+            block_number: forkedBlock.rows[0].number,
+            block_hash: forkedBlock.rows[0].hash,
+            parent_hash: forkedBlock.rows[0].parent_hash,
+            timestamp: forkedBlock.rows[0].timestamp,
+          };
+          await this.reorgHandler(forkedBlockDataForHandler);
         }
 
         this.logger.info(`Successfully handled reorg from block #${forkBlockNumber}`);

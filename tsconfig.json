@@ -11,6 +11,6 @@
     "noImplicitAny": false,
     "resolveJsonModule": true
   },
-  "include": ["src", "test", "example"],
+  "include": ["src", "test", "example", "jest.config.js"],
   "exclude": ["node_modules", "dist"]
 }

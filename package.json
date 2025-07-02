@@ -4,12 +4,13 @@
   "main": "dist/index.js",
   "types": "dist/index.d.ts",
   "scripts": {
+    "chain": "starknet-devnet --state-archive-capacity full --seed 0",
     "build": "tsc --skipLibCheck",
     "lint": "eslint . --ext .ts",
     "lint:fix": "eslint . --ext .ts --fix",
     "format": "prettier --write \"**/*.{ts,js,json,md}\"",
     "postinstall": "npx patch-package",
-    "test": "jest --passWithNoTests"
+    "test": "jest --passWithNoTests --forceExit"
   },
   "dependencies": {
     "abi-wan-kanabi": "2.2.4",
