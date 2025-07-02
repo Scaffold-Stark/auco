@@ -82,6 +82,13 @@ export type StarknetEvent<TAbi extends Abi, TEventName extends ExtractAbiEventNa
   parsed: EventToPrimitiveType<TAbi, TEventName>;
 };
 
+interface QueuedBlock {
+  block_number: number;
+  block_hash: string;
+  parent_hash: string;
+  timestamp: number;
+}
+
 export type EventHandler<TAbi extends Abi, TEventName extends ExtractAbiEventNames<TAbi>> = (
   event: StarknetEvent<TAbi, TEventName>,
   client: PoolClient,
@@ -99,11 +106,11 @@ interface EventHandlerConfig {
   handler: EventHandler<any, any>;
 }
 
-interface QueuedBlock {
-  block_number: number;
-  block_hash: string;
-  parent_hash: string;
-  timestamp: number;
+export type ReorgHandler = (forkedBlock: QueuedBlock) => Promise<void>;
+
+interface ReorgHandlerParams {
+  handler: ReorgHandler;
+  isOverride?: boolean;
 }
 
 interface Cursor {
@@ -115,6 +122,7 @@ export class StarknetIndexer {
   private wsChannel: WebSocketChannel;
   private pool: Pool;
   private eventHandlers: Map<string, EventHandlerConfig[]> = new Map();
+  private reorgHandler: ReorgHandler | null = null; // using dedicated variable to avoid type conflicts
   private started: boolean = false;
   private provider?: RpcProvider;
   private blockQueue: QueuedBlock[] = [];
@@ -518,6 +526,28 @@ export class StarknetIndexer {
     this.abiMapping.set(normalizedAddress, abi);
   }
 
+  // Register an event handler for a contract address with optional event name
+  public async onReorg(params: ReorgHandlerParams): Promise<void> {
+    const { handler, isOverride } = params;
+
+    if (!handler) {
+      throw new Error('Handler is required');
+    }
+
+    if (!!this.reorgHandler) {
+      if (isOverride) {
+        this.logger.warn('Reorg handler already registered, overriding...');
+      }
+
+      // we want to be able to throw to prevent accidental errors
+      else {
+        throw new Error('Reorg handler already registered, use isOverride to override');
+      }
+    }
+
+    this.reorgHandler = handler;
+  }
+
   // Start the indexer
   public async start(): Promise<void> {
     await this.initializeDatabase();
@@ -663,6 +693,16 @@ export class StarknetIndexer {
 
         if (this.cursor && this.cursor.blockNumber >= forkBlockNumber) {
           await this.updateCursor(forkBlockNumber - 1, '', client);
+        }
+
+        if (this.reorgHandler) {
+          const forkedBlockDataForHandler = {
+            block_number: forkedBlock.rows[0].number,
+            block_hash: forkedBlock.rows[0].hash,
+            parent_hash: forkedBlock.rows[0].parent_hash,
+            timestamp: forkedBlock.rows[0].timestamp,
+          };
+          await this.reorgHandler(forkedBlockDataForHandler);
         }
 
         this.logger.info(`Successfully handled reorg from block #${forkBlockNumber}`);

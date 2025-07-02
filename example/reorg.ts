@@ -89,6 +89,13 @@ async function runReorgExample(): Promise<void> {
     },
   });
 
+  // Set up reorg handler
+  indexer.onReorg({
+    handler: async (forkedBlock) => {
+      console.log('Reorg detected at block', forkedBlock);
+    },
+  });
+
   // Set up contract with first devnet account
   const strkContract = new Contract(universalErc20Abi, CONFIG.CONTRACT_ADDRESS, provider);
   strkContract.connect(
