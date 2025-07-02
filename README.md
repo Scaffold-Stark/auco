@@ -1,4 +1,4 @@
-# Starknet JS Indexer
+# Auco
 
 A TypeScript/Node.js indexer for Starknet events, supporting PostgreSQL and real-time event handling via WebSocket and RPC.
 
@@ -73,6 +73,12 @@ npm test
 - `contractAddresses`: Array of contract addresses to index
 - `logLevel`: Log verbosity
 - `startingBlockNumber`: Starting block number to start indexing from
+
+## Handling Chain Reorgs
+
+The indexer provides a mechanism to detect and respond to chain reorgs. When a reorg is detected, the indexer will roll back non-canonical blocks and events in the database, and then invoke a user-defined reorg handler.
+
+Important: You must implement your own logic for handling reorgs in your application. The indexer only provides the hook and basic database cleanup.
 
 ## Troubleshooting
 - Ensure PostgreSQL is running and accessible
