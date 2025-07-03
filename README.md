@@ -140,7 +140,6 @@ npm run build         # Compile TypeScript
 ### 📋 Planned
 - [ ] Additional database (MongoDB, MySQL, etc.)
 - [ ] Built-in monitoring and health checks
-- [ ] Rate limiting and connection pooling improvements
 - [ ] Advanced caching layer
 - [ ] Docker containerization
 - [ ] Event filtering by multiple criteria
