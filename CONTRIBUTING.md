@@ -24,8 +24,20 @@ This project and everyone participating in it is governed by our Code of Conduct
 - **Node.js**: Version 18 or higher
 - **PostgreSQL**: Version 12 or higher
 - **Git**: For version control
-- **Docker**: Optional, for local development environment
+- **Docker**: Optional, for local development database
 - **Starknet Node**: For local development environment
+
+> **Install StarkNet Node (Devnet, spec 0.8+)**: 
+> The recommended way to run a local StarkNet node is to use the official Devnet. Install it with:
+> 
+> ```bash
+> curl --proto '=https' --tlsv1.2 -sSf https://sh.starkup.sh | sh
+> ```
+> Then start the node with:
+> ```bash
+> starknet-devnet
+> ```
+> For more details, see the [official StarkNet environment setup guide](https://docs.starknet.io/guides/quickstart/environment-setup/).
 
 ### Fork and Clone
 
@@ -37,7 +49,7 @@ This project and everyone participating in it is governed by our Code of Conduct
    ```
 3. Add the upstream repository:
    ```bash
-   git remote add upstream https://github.com/your-org/starknet-js-indexer.git
+   git remote add upstream https://github.com/Quantum3-Labs/starknet-js-indexer.git
    ```
 
 ## Development Setup
@@ -344,16 +356,16 @@ Any additional context, use cases, or examples
 
 ## Getting Help
 
-- 📖 **Documentation**: Check the [README](README.md) and [API docs](docs/API.md)
-- 🐛 **Issues**: Search existing [GitHub Issues](https://github.com/your-org/starknet-js-indexer/issues)
-- 💬 **Discussions**: Join [GitHub Discussions](https://github.com/your-org/starknet-js-indexer/discussions)
+- 📖 **Documentation**: Check the [README](README.md)
+- 🐛 **Issues**: Search existing [GitHub Issues](https://github.com/Quantum3-Labs/starknet-js-indexer/issues)
+- 💬 **Discussions**: Join [GitHub Discussions](https://github.com/Quantum3-Labs/starknet-js-indexer/discussions)
 - 📧 **Email**: Contact maintainers directly for sensitive issues
 
 ## Recognition
 
 Contributors will be recognized in:
 
-- [Contributors list](https://github.com/your-org/starknet-js-indexer/graphs/contributors)
+- [Contributors list](https://github.com/Quantum3-Labs/starknet-js-indexer/graphs/contributors)
 - Release notes for significant contributions
 - Project documentation for major features
 
