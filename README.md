@@ -143,6 +143,7 @@ npm run build         # Compile TypeScript
 - [ ] Advanced caching layer
 - [ ] Docker containerization
 - [ ] Event filtering by multiple criteria
+- [ ] Instant event processing via WebSocket
 
 ## Contributing
 
