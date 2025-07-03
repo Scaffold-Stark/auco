@@ -1,5 +1,5 @@
-import { universalErc20Abi } from './constants';
-import { StarknetIndexer } from '../src/index';
+import { universalErc20Abi } from '../../../test-utils/constants';
+import { StarknetIndexer } from '../../index';
 
 describe('StarknetIndexer', () => {
   // Global cleanup to ensure Jest exits properly

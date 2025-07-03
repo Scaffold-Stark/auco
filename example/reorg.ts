@@ -1,6 +1,6 @@
 import { Account, Contract, RpcProvider } from 'starknet';
 import { StarknetEvent, StarknetIndexer } from '../src';
-import { universalErc20Abi } from '../test/constants';
+import { universalErc20Abi } from '../test-utils/constants';
 
 // Configuration constants
 const CONFIG = {
