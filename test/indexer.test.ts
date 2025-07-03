@@ -136,7 +136,7 @@ describe('StarknetIndexer', () => {
     });
 
     describe('handleReorg', () => {
-      it('should mark forked blocks as non-canonical and delete associated events', async () => {
+      it('should delete forked blocks and associated events', async () => {
         const forkBlockNumber = 50;
         const forkedBlockHash = '0xabc123';
         const childBlockHash = '0xdef456';
@@ -169,13 +169,13 @@ describe('StarknetIndexer', () => {
             });
           }
 
-          // UPDATE blocks query
-          if (query.includes('UPDATE blocks') && query.includes('SET is_canonical = FALSE')) {
+          // DELETE blocks query
+          if (query.includes('DELETE FROM blocks') && query.includes('WHERE hash = $1')) {
             return Promise.resolve({ rows: [] });
           }
 
           // DELETE events query
-          if (query.includes('DELETE FROM events')) {
+          if (query.includes('DELETE FROM events') && query.includes('WHERE block_number = $1')) {
             return Promise.resolve({ rows: [] });
           }
 
@@ -207,16 +207,16 @@ describe('StarknetIndexer', () => {
 
         await mockIndexer.handleReorg(forkBlockNumber);
 
-        // Verify that blocks were marked as non-canonical
+        // Verify that blocks were deleted
         expect(mockPoolClient.query).toHaveBeenCalledWith(
-          expect.stringContaining('UPDATE blocks'),
+          expect.stringContaining('DELETE FROM blocks'),
           [forkedBlockHash]
         );
 
         // Verify that events were deleted
         expect(mockPoolClient.query).toHaveBeenCalledWith(
           expect.stringContaining('DELETE FROM events'),
-          [forkBlockNumber, forkedBlockHash]
+          [forkBlockNumber]
         );
 
         // Verify cursor was updated
@@ -276,17 +276,17 @@ describe('StarknetIndexer', () => {
 
         await mockIndexer.handleReorg(forkBlockNumber);
 
-        // Should have processed all 3 blocks
+        // Should have processed all 3 blocks (deleted them)
         expect(mockPoolClient.query).toHaveBeenCalledWith(
-          expect.stringContaining('UPDATE blocks'),
+          expect.stringContaining('DELETE FROM blocks'),
           ['0xblock45']
         );
         expect(mockPoolClient.query).toHaveBeenCalledWith(
-          expect.stringContaining('UPDATE blocks'),
+          expect.stringContaining('DELETE FROM blocks'),
           ['0xblock46']
         );
         expect(mockPoolClient.query).toHaveBeenCalledWith(
-          expect.stringContaining('UPDATE blocks'),
+          expect.stringContaining('DELETE FROM blocks'),
           ['0xblock47']
         );
       });
@@ -356,7 +356,7 @@ describe('StarknetIndexer', () => {
             });
           }
 
-          // UPDATE, DELETE, and other queries
+          // DELETE blocks and events queries
           return Promise.resolve({ rows: [] });
         });
 
@@ -365,7 +365,7 @@ describe('StarknetIndexer', () => {
         // Verify events were deleted during reorg
         expect(mockPoolClient.query).toHaveBeenCalledWith(
           expect.stringContaining('DELETE FROM events'),
-          [reorgBlock, '0xoriginal48']
+          [reorgBlock]
         );
       }, 10000);
 
@@ -445,13 +445,13 @@ describe('StarknetIndexer', () => {
             });
           }
 
-          // UPDATE blocks query
-          if (query.includes('UPDATE blocks') && query.includes('SET is_canonical = FALSE')) {
+          // DELETE blocks query
+          if (query.includes('DELETE FROM blocks') && query.includes('WHERE hash = $1')) {
             return Promise.resolve({ rows: [] });
           }
 
           // DELETE events query
-          if (query.includes('DELETE FROM events')) {
+          if (query.includes('DELETE FROM events') && query.includes('WHERE block_number = $1')) {
             return Promise.resolve({ rows: [] });
           }
 
