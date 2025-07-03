@@ -1,17 +1,19 @@
-import { PoolClient } from 'pg';
+import { Pool, PoolClient } from 'pg';
 import type { BlockData, EventData, IndexerState } from '../../types/db-handler';
 import { BaseDbHandler } from './base-db-handler';
 
 export class PostgresDbHandler extends BaseDbHandler {
-  constructor(private client: PoolClient) {
+  private client?: PoolClient;
+
+  constructor(private pool: Pool) {
     super();
   }
 
-  async query(query: string, params: any[] = []): Promise<any> {
-    return await this.client.query(query, params);
-  }
-
   async initializeDb(): Promise<void> {
+    if (!this.client) {
+      throw new Error('Database client not initialized');
+    }
+
     // Create tables and indexes
     await this.client.query(`
       CREATE TABLE IF NOT EXISTS blocks (
@@ -47,12 +49,26 @@ export class PostgresDbHandler extends BaseDbHandler {
     `);
   }
 
-  async closeDb(): Promise<void> {
-    this.client.release();
+  async connect(): Promise<void> {
+    this.client = await this.pool.connect();
+  }
+
+  async disconnect(): Promise<void> {
+    if (this.client) {
+      this.client.release();
+    }
+  }
+
+  isConnected(): boolean {
+    return !!this.client;
   }
 
   // State management methods
   async getIndexerState(cursorKey?: string): Promise<IndexerState | null> {
+    if (!this.client) {
+      throw new Error('Database client not initialized');
+    }
+
     const result = await this.client.query(
       `
         SELECT last_block_number, last_block_hash 
@@ -74,6 +90,10 @@ export class PostgresDbHandler extends BaseDbHandler {
   }
 
   async initializeIndexerState(startingBlock: number, cursorKey?: string): Promise<void> {
+    if (!this.client) {
+      throw new Error('Database client not initialized');
+    }
+
     await this.client.query(
       `
         INSERT INTO indexer_state (last_block_number, last_block_hash, cursor_key) 
@@ -84,6 +104,10 @@ export class PostgresDbHandler extends BaseDbHandler {
   }
 
   async updateCursor(blockNumber: number, blockHash: string, cursorKey?: string): Promise<void> {
+    if (!this.client) {
+      throw new Error('Database client not initialized');
+    }
+
     await this.client.query(
       `
         UPDATE indexer_state 
@@ -96,6 +120,10 @@ export class PostgresDbHandler extends BaseDbHandler {
 
   // Block operations
   async insertBlock(blockData: BlockData): Promise<void> {
+    if (!this.client) {
+      throw new Error('Database client not initialized');
+    }
+
     const timestamp =
       typeof blockData.timestamp === 'number'
         ? blockData.timestamp * 1000
@@ -114,6 +142,10 @@ export class PostgresDbHandler extends BaseDbHandler {
 
   async batchInsertBlocks(blocks: BlockData[]): Promise<void> {
     if (blocks.length === 0) return;
+
+    if (!this.client) {
+      throw new Error('Database client not initialized');
+    }
 
     const values = blocks
       .map((block) => {
@@ -137,14 +169,23 @@ export class PostgresDbHandler extends BaseDbHandler {
   }
 
   async checkIsBlockProcessed(blockNumber: number): Promise<boolean> {
+    if (!this.client) {
+      throw new Error('Database client not initialized');
+    }
+
     const result = await this.client.query(
       `SELECT EXISTS (SELECT 1 FROM blocks WHERE number = $1) AS "exists"`,
       [blockNumber]
     );
+
     return result.rows[0].exists;
   }
 
   async getBlockByNumber(blockNumber: number): Promise<BlockData | null> {
+    if (!this.client) {
+      throw new Error('Database client not initialized');
+    }
+
     const result = await this.client.query(`SELECT * FROM blocks WHERE number = $1`, [blockNumber]);
 
     if (result.rows.length === 0) {
@@ -161,6 +202,10 @@ export class PostgresDbHandler extends BaseDbHandler {
   }
 
   async getBlockByParentHash(parentHash: string): Promise<BlockData | null> {
+    if (!this.client) {
+      throw new Error('Database client not initialized');
+    }
+
     const result = await this.client.query(`SELECT * FROM blocks WHERE parent_hash = $1`, [
       parentHash,
     ]);
@@ -180,28 +225,52 @@ export class PostgresDbHandler extends BaseDbHandler {
 
   // Reorg operations
   async deleteBlock(blockHash: string): Promise<void> {
+    if (!this.client) {
+      throw new Error('Database client not initialized');
+    }
+
     await this.client.query(`DELETE FROM blocks WHERE hash = $1`, [blockHash]);
   }
 
   async deleteEventsByBlockNumber(blockNumber: number): Promise<void> {
+    if (!this.client) {
+      throw new Error('Database client not initialized');
+    }
+
     await this.client.query(`DELETE FROM events WHERE block_number = $1`, [blockNumber]);
   }
 
   // Transaction management
   async beginTransaction(): Promise<void> {
+    if (!this.client) {
+      throw new Error('Database client not initialized');
+    }
+
     await this.client.query('BEGIN');
   }
 
   async commitTransaction(): Promise<void> {
+    if (!this.client) {
+      throw new Error('Database client not initialized');
+    }
+
     await this.client.query('COMMIT');
   }
 
   async rollbackTransaction(): Promise<void> {
+    if (!this.client) {
+      throw new Error('Database client not initialized');
+    }
+
     await this.client.query('ROLLBACK');
   }
 
   // Event operations
   async insertEvent(eventData: EventData): Promise<void> {
+    if (!this.client) {
+      throw new Error('Database client not initialized');
+    }
+
     await this.client.query(
       `
         INSERT INTO events (block_number, transaction_hash, from_address, event_index, keys, data)
@@ -216,5 +285,12 @@ export class PostgresDbHandler extends BaseDbHandler {
         eventData.data,
       ]
     );
+  }
+
+  async query(query: string, params: any[] = []): Promise<any> {
+    if (!this.client) {
+      throw new Error('Database client not initialized');
+    }
+    return await this.client.query(query, params);
   }
 }

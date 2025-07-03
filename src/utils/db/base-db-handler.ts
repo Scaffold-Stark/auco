@@ -3,7 +3,11 @@ import { BlockData, EventData, IndexerState } from '../../types/db-handler';
 export abstract class BaseDbHandler {
   abstract initializeDb(): Promise<void>;
 
-  abstract closeDb(): Promise<void>;
+  abstract connect(): Promise<void>;
+
+  abstract disconnect(): Promise<void>;
+
+  abstract isConnected(): boolean;
 
   abstract getIndexerState(cursorKey?: string): Promise<IndexerState | null>;
 
@@ -32,4 +36,6 @@ export abstract class BaseDbHandler {
   abstract rollbackTransaction(): Promise<void>;
 
   abstract insertEvent(eventData: EventData): Promise<void>;
+
+  abstract query(query: string, params: any[]): Promise<any>;
 }

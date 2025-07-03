@@ -1,7 +1,7 @@
 import { Abi } from 'abi-wan-kanabi';
 import { ExtractAbiEventNames, EventToPrimitiveType } from 'abi-wan-kanabi/kanabi';
-import { PoolClient } from 'pg';
 import { StarknetIndexer } from '..';
+import { BaseDbHandler } from '../utils/db/base-db-handler';
 
 export enum LogLevel {
   DEBUG = 'debug',
@@ -81,7 +81,7 @@ export interface QueuedBlock {
 
 export type EventHandler<TAbi extends Abi, TEventName extends ExtractAbiEventNames<TAbi>> = (
   event: StarknetEvent<TAbi, TEventName>,
-  client: PoolClient,
+  dbHandler: BaseDbHandler,
   indexer: StarknetIndexer
 ) => Promise<void>;
 
