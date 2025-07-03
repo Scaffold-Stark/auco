@@ -1,3 +1,4 @@
+[![CI](https://github.com/Quantum3-Labs/starknet-js-indexer/actions/workflows/ci.yaml/badge.svg)](https://github.com/Quantum3-Labs/starknet-js-indexer/actions/workflows/ci.yaml)
 [![npm version](https://badge.fury.io/js/auco.svg)](https://badge.fury.io/js/auco)
 [![TypeScript](https://img.shields.io/badge/TypeScript-5.0-blue.svg)](https://www.typescriptlang.org/)
 [![License](https://img.shields.io/badge/License-MIT-green.svg)](LICENSE)
