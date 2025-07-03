@@ -117,10 +117,10 @@ describe('StarknetIndexer', () => {
 
       // Clean up WebSocket if it exists
       if ((mockIndexer as any).wsChannel) {
-        (mockIndexer as any).wsChannel.onNewHeads = undefined;
-        (mockIndexer as any).wsChannel.onReorg = undefined;
-        (mockIndexer as any).wsChannel.onError = undefined;
-        (mockIndexer as any).wsChannel.onClose = undefined;
+        (mockIndexer as any).wsChannel.onNewHeads = () => {};
+        (mockIndexer as any).wsChannel.onReorg = () => {};
+        (mockIndexer as any).wsChannel.onError = () => {};
+        (mockIndexer as any).wsChannel.onClose = () => {};
       }
 
       await mockIndexer.stop();
