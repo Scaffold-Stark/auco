@@ -121,6 +121,7 @@ interface Cursor {
 export class StarknetIndexer {
   private wsChannel: WebSocketChannel;
   private pool: Pool;
+  private client?: PoolClient;
   private eventHandlers: Map<string, EventHandlerConfig[]> = new Map();
   private reorgHandler: ReorgHandler | null = null; // using dedicated variable to avoid type conflicts
   private started: boolean = false;
@@ -279,131 +280,34 @@ export class StarknetIndexer {
     fn: (client: PoolClient) => Promise<T>,
     context: Record<string, any> = {}
   ): Promise<T | undefined> {
-    const client = await this.pool.connect();
+    if (!this.client) {
+      this.logger.warn('Persistent database client not initialized, attempting to connect...');
+      try {
+        this.client = await this.pool.connect();
+        this.logger.info('Persistent database client connected successfully');
+      } catch (err) {
+        this.logger.error('Failed to connect persistent database client:', err);
+        return undefined;
+      }
+    }
+
     try {
-      await client.query('BEGIN');
-      const result = await fn(client);
-      await client.query('COMMIT');
+      await this.client.query('BEGIN');
+      const result = await fn(this.client);
+      await this.client.query('COMMIT');
       return result;
     } catch (error) {
-      await client.query('ROLLBACK');
+      await this.client.query('ROLLBACK');
       this.logger.error(`${operation} failed:`, { ...context, error });
       return undefined;
-    } finally {
-      client.release();
-    }
-  }
-
-  // Process block transactions and extract events
-  private async processBlockTransactions(blockNumber: number): Promise<void> {
-    if (!this.provider) return;
-
-    try {
-      const blockWithReceipts = await this.provider.getBlockWithReceipts(blockNumber);
-
-      if (!blockWithReceipts || !blockWithReceipts.transactions) {
-        return;
-      }
-
-      for (const txWithReceipt of blockWithReceipts.transactions) {
-        const receipt = txWithReceipt.receipt;
-
-        if (!receipt.events || receipt.events.length === 0) continue;
-
-        for (let eventIndex = 0; eventIndex < receipt.events.length; eventIndex++) {
-          const event = receipt.events[eventIndex];
-          const fromAddress = this.normalizeAddress(event.from_address);
-
-          if (this.contractAddresses.size > 0 && !this.contractAddresses.has(fromAddress)) {
-            continue;
-          }
-
-          const eventObj = {
-            block_number: blockNumber,
-            block_hash: (blockWithReceipts as any).block_hash || '',
-            transaction_hash: receipt.transaction_hash,
-            from_address: fromAddress,
-            event_index: eventIndex,
-            keys: event.keys,
-            data: event.data,
-            parsed: {},
-          };
-
-          let handlerConfigs: EventHandlerConfig[] = [];
-
-          if (event.keys && event.keys.length > 0) {
-            const eventSelector = event.keys[0];
-            const specificHandlerKey = `${fromAddress}:${eventSelector}`;
-            const specificHandlers = this.eventHandlers.get(specificHandlerKey) || [];
-            handlerConfigs = [...specificHandlers];
-          }
-
-          const generalHandlers = this.eventHandlers.get(fromAddress) || [];
-          handlerConfigs = [...handlerConfigs, ...generalHandlers];
-
-          if (handlerConfigs.length > 0) {
-            const abi = this.abiMapping.get(fromAddress);
-            let parsedEvent = eventObj;
-
-            if (abi) {
-              try {
-                const abiEvents = events.getAbiEvents(abi);
-                const abiStructs = CallData.getAbiStruct(abi);
-                const abiEnums = CallData.getAbiEnum(abi);
-
-                const parsedEvents = events.parseEvents(
-                  [eventObj],
-                  abiEvents,
-                  abiStructs,
-                  abiEnums
-                );
-
-                if (parsedEvents && parsedEvents.length > 0) {
-                  // Get the first key of the parsed event (the event name)
-                  const eventKey = Object.keys(parsedEvents[0])[0];
-                  const parsedValues = parsedEvents[0][eventKey];
-
-                  const parsedEventWithOriginal = {
-                    ...parsedEvents[0],
-                    _rawEvent: eventObj,
-                    block_number: eventObj.block_number,
-                    block_hash: eventObj.block_hash,
-                    transaction_hash: eventObj.transaction_hash,
-                    from_address: fromAddress,
-                    event_index: eventObj.event_index,
-                    keys: eventObj.keys,
-                    data: eventObj.data,
-                    parsed: parsedValues, // Add the parsed values directly
-                  };
-                  parsedEvent = parsedEventWithOriginal;
-                  this.logger.debug(`Parsed event values:`, parsedValues);
-                }
-              } catch (error) {
-                this.logger.error(`Error parsing event from contract ${fromAddress}:`, error);
-              }
-            }
-
-            for (const { handler } of handlerConfigs) {
-              try {
-                await handler(parsedEvent, await this.pool.connect(), this);
-              } catch (error) {
-                this.logger.error(
-                  `Error processing event handler for contract ${fromAddress}:`,
-                  error
-                );
-              }
-            }
-          }
-        }
-      }
-    } catch (error) {
-      this.logger.error(`Error processing block ${blockNumber} transactions:`, error);
     }
   }
 
   // Initialize the database schema
   public async initializeDatabase(): Promise<number | undefined> {
-    const client = await this.pool.connect();
+    const client = this.client || (await this.pool.connect());
+    const shouldRelease = !this.client;
+
     try {
       // in blocks table, composite primary key with both number and hash
       await client.query(`
@@ -441,10 +345,10 @@ export class StarknetIndexer {
 
       const result = await client.query(
         `
-        SELECT last_block_number, last_block_hash 
-        FROM indexer_state 
-        WHERE id = 1 AND (cursor_key IS NULL OR cursor_key = $1)
-      `,
+          SELECT last_block_number, last_block_hash 
+          FROM indexer_state 
+          WHERE id = 1 AND (cursor_key IS NULL OR cursor_key = $1)
+        `,
         [this.config.cursorKey || null]
       );
 
@@ -460,9 +364,9 @@ export class StarknetIndexer {
 
         await client.query(
           `
-          INSERT INTO indexer_state (last_block_number, last_block_hash, cursor_key) 
-          VALUES ($1, $2, $3)
-        `,
+            INSERT INTO indexer_state (last_block_number, last_block_hash, cursor_key) 
+            VALUES ($1, $2, $3)
+          `,
           [startingBlock, '', this.config.cursorKey || null]
         );
 
@@ -475,7 +379,9 @@ export class StarknetIndexer {
         return this.cursor.blockNumber;
       }
     } finally {
-      client.release();
+      if (shouldRelease) {
+        client.release();
+      }
     }
   }
 
@@ -552,6 +458,11 @@ export class StarknetIndexer {
   public async start(): Promise<void> {
     await this.initializeDatabase();
     this.logger.info(`Starting from block ${this.cursor?.blockNumber}`);
+
+    // Establish persistent database connection
+    this.logger.info('[Database] Establishing connection...');
+    this.client = await this.pool.connect();
+    this.logger.info('[Database] Connection established');
 
     const currentBlock = this.provider ? await this.provider.getBlockNumber() : 0;
     let targetBlock: number;
@@ -722,6 +633,14 @@ export class StarknetIndexer {
     if (this.retryTimeout) {
       clearTimeout(this.retryTimeout);
       this.retryTimeout = undefined;
+    }
+
+    // Close persistent database connection
+    if (this.client) {
+      this.logger.info('[Database] Closing connection...');
+      this.client.release();
+      this.client = undefined;
+      this.logger.info('[Database] Connection closed');
     }
 
     try {
