@@ -8,7 +8,6 @@ import {
   EmittedEvent,
   WebSocketChannel,
 } from 'starknet';
-import { Pool, PoolClient } from 'pg';
 import { ExtractAbiEventNames } from 'abi-wan-kanabi/kanabi';
 import { groupConsecutiveBlocks } from '../utils/blockUtils';
 import {
@@ -23,12 +22,9 @@ import {
   QueuedBlock,
 } from '../types/indexer';
 import { BaseDbHandler } from '../utils/db/base-db-handler';
-import { PostgresDbHandler } from '../utils/db/postgres-db-handler';
 
 export class StarknetIndexer {
   private wsChannel: WebSocketChannel;
-  private pool: Pool;
-  private client?: PoolClient;
   private eventHandlers: Map<string, EventHandlerConfig[]> = new Map();
   private reorgHandler: ReorgHandler | null = null; // using dedicated variable to avoid type conflicts
   private started: boolean = false;
@@ -58,11 +54,7 @@ export class StarknetIndexer {
       nodeUrl: config.wsNodeUrl,
     });
 
-    this.pool = new Pool({
-      connectionString: config.databaseUrl,
-    });
-
-    this.dbHandler = new PostgresDbHandler(this.pool);
+    this.dbHandler = config.database;
 
     if (config.contractAddresses) {
       config.contractAddresses.forEach((address) => {
@@ -337,7 +329,7 @@ export class StarknetIndexer {
 
     // Establish persistent database connection
     this.logger.info('[Database] Establishing connection...');
-    this.client = await this.pool.connect();
+    await this.dbHandler.connect();
     this.logger.info('[Database] Connection established');
 
     const currentBlock = this.provider ? await this.provider.getBlockNumber() : 0;
@@ -488,17 +480,10 @@ export class StarknetIndexer {
     }
 
     // Close persistent database connection
-    if (this.client) {
+    if (this.dbHandler.isConnected()) {
       this.logger.info('[Database] Closing connection...');
-      this.client.release();
-      this.client = undefined;
+      await this.dbHandler.disconnect();
       this.logger.info('[Database] Connection closed');
-    }
-
-    try {
-      await this.pool.end();
-    } catch (error) {
-      this.logger.error('Error closing database pool:', error);
     }
 
     this.logger.info('Indexer stopped');
@@ -804,11 +789,7 @@ export class StarknetIndexer {
   }
 
   private async checkIsBlockProcessed(blockNumber: number): Promise<boolean> {
-    const result = await this.pool.query(
-      `SELECT EXISTS (SELECT 1 FROM blocks WHERE number = $1) AS "exists"`,
-      [blockNumber]
-    );
-    return result.rows[0].exists;
+    return await this.dbHandler.checkIsBlockProcessed(blockNumber);
   }
 
   private addFailedBlock(blockData: QueuedBlock, _error: any): void {

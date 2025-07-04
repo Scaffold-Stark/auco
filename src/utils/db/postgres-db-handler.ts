@@ -1,12 +1,20 @@
 import { Pool, PoolClient } from 'pg';
-import type { BlockData, EventData, IndexerState } from '../../types/db-handler';
+import type {
+  BlockData,
+  EventData,
+  IndexerState,
+  PostgresDbHandlerConfig,
+} from '../../types/db-handler';
 import { BaseDbHandler } from './base-db-handler';
-
 export class PostgresDbHandler extends BaseDbHandler {
   private client?: PoolClient;
+  private pool: Pool;
 
-  constructor(private pool: Pool) {
+  constructor(private config: PostgresDbHandlerConfig) {
     super();
+    this.pool = new Pool({
+      connectionString: config.connectionString,
+    });
   }
 
   async initializeDb(): Promise<void> {
@@ -56,6 +64,15 @@ export class PostgresDbHandler extends BaseDbHandler {
   async disconnect(): Promise<void> {
     if (this.client) {
       this.client.release();
+      this.client = undefined;
+    }
+  }
+
+  async cleanup(): Promise<void> {
+    try {
+      await this.pool.end();
+    } catch (error) {
+      console.error('Error closing database pool:', error);
     }
   }
 

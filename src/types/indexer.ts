@@ -53,7 +53,7 @@ export class ConsoleLogger implements Logger {
 export interface IndexerConfig {
   rpcNodeUrl: string;
   wsNodeUrl: string;
-  databaseUrl: string;
+  database: BaseDbHandler;
   startingBlockNumber: number | 'latest';
   contractAddresses?: string[];
   cursorKey?: string;

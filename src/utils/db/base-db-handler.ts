@@ -38,4 +38,6 @@ export abstract class BaseDbHandler {
   abstract insertEvent(eventData: EventData): Promise<void>;
 
   abstract query(query: string, params: any[]): Promise<any>;
+
+  abstract cleanup(): Promise<void>;
 }

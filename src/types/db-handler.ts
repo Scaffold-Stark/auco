@@ -19,3 +19,7 @@ export interface EventData {
   keys: string[];
   data: string[];
 }
+
+export interface PostgresDbHandlerConfig {
+  connectionString: string;
+}

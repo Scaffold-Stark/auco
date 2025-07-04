@@ -1,5 +1,5 @@
 import { Account, Contract, RpcProvider } from 'starknet';
-import { StarknetEvent, StarknetIndexer } from '../src';
+import { PostgresDbHandler, StarknetEvent, StarknetIndexer } from '../src';
 import { universalErc20Abi } from '../test-utils/constants';
 
 // Configuration constants
@@ -28,7 +28,9 @@ const provider = new RpcProvider({ nodeUrl: CONFIG.RPC_URL });
 const indexer = new StarknetIndexer({
   rpcNodeUrl: CONFIG.RPC_URL,
   wsNodeUrl: CONFIG.WS_URL,
-  databaseUrl: CONFIG.DATABASE_URL,
+  database: new PostgresDbHandler({
+    connectionString: CONFIG.DATABASE_URL,
+  }),
   startingBlockNumber: CONFIG.STARTING_BLOCK,
   contractAddresses: [CONFIG.CONTRACT_ADDRESS],
 });

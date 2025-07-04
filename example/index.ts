@@ -1,4 +1,4 @@
-import { StarknetIndexer, LogLevel } from '../src/index';
+import { StarknetIndexer, LogLevel, PostgresDbHandler } from '../src/index';
 import abi from './abi/ABI';
 
 const indexer = new StarknetIndexer({
@@ -7,7 +7,9 @@ const indexer = new StarknetIndexer({
   wsNodeUrl: 'wss://starknet-sepolia-rpc.publicnode.com',
 
   // Change your database connection string here if needed
-  databaseUrl: 'postgresql://postgres:postgres@localhost:5432/starknet_indexer',
+  database: new PostgresDbHandler({
+    connectionString: 'postgresql://postgres:postgres@localhost:5432/starknet_indexer',
+  }),
 
   logLevel: LogLevel.INFO,
   startingBlockNumber: 'latest',

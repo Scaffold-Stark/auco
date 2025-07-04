@@ -327,4 +327,15 @@ export class SqliteDbHandler extends BaseDbHandler {
       };
     }
   }
+
+  async cleanup(): Promise<void> {
+    if (this.db) {
+      try {
+        this.db.close();
+      } catch (error) {
+        console.error('Error closing database:', error);
+      }
+      this.db = undefined;
+    }
+  }
 }
