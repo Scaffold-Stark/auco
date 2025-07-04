@@ -8,7 +8,7 @@ import type {
 } from '../../types/db-handler';
 
 export class MysqlDbHandler extends BaseDbHandler {
-  private connection?: mysql.Connection;
+  private connection?: mysql.PoolConnection;
   private pool: mysql.Pool;
 
   constructor(private config: MysqlDbHandlerConfig) {
@@ -46,8 +46,8 @@ export class MysqlDbHandler extends BaseDbHandler {
         transaction_hash VARCHAR(66) NOT NULL,
         from_address VARCHAR(66) NOT NULL,
         event_index INT NOT NULL,
-        keys JSON NOT NULL,
-        data JSON NOT NULL,
+        \`keys\` JSON NOT NULL,
+        \`data\` JSON NOT NULL,
         FOREIGN KEY (block_number) REFERENCES blocks(number) ON DELETE CASCADE
       );
     `);
@@ -62,14 +62,28 @@ export class MysqlDbHandler extends BaseDbHandler {
       );
     `);
 
-    // Create indexes
-    await this.execute(`
-      CREATE INDEX IF NOT EXISTS idx_events_block ON events(block_number);
-    `);
+    // Create indexes (MySQL doesn't support IF NOT EXISTS for CREATE INDEX)
+    try {
+      await this.execute(`
+        CREATE INDEX idx_events_block ON events(block_number);
+      `);
+    } catch (error: any) {
+      // Index might already exist, ignore duplicate key error
+      if (error.code !== 'ER_DUP_KEYNAME') {
+        throw error;
+      }
+    }
 
-    await this.execute(`
-      CREATE INDEX IF NOT EXISTS idx_events_from ON events(from_address);
-    `);
+    try {
+      await this.execute(`
+        CREATE INDEX idx_events_from ON events(from_address);
+      `);
+    } catch (error: any) {
+      // Index might already exist, ignore duplicate key error
+      if (error.code !== 'ER_DUP_KEYNAME') {
+        throw error;
+      }
+    }
   }
 
   async connect(): Promise<void> {
@@ -78,7 +92,7 @@ export class MysqlDbHandler extends BaseDbHandler {
 
   async disconnect(): Promise<void> {
     if (this.connection) {
-      await this.connection.end();
+      this.connection.release();
       this.connection = undefined;
     }
   }
@@ -280,7 +294,7 @@ export class MysqlDbHandler extends BaseDbHandler {
       throw new Error('Database connection not initialized');
     }
 
-    await this.execute(`BEGIN`);
+    await this.connection.beginTransaction();
   }
 
   async commitTransaction(): Promise<void> {
@@ -288,7 +302,7 @@ export class MysqlDbHandler extends BaseDbHandler {
       throw new Error('Database connection not initialized');
     }
 
-    await this.execute(`COMMIT`);
+    await this.connection.commit();
   }
 
   async rollbackTransaction(): Promise<void> {
@@ -296,7 +310,7 @@ export class MysqlDbHandler extends BaseDbHandler {
       throw new Error('Database connection not initialized');
     }
 
-    await this.execute(`ROLLBACK`);
+    await this.connection.rollback();
   }
 
   async insertEvent(eventData: EventData): Promise<void> {
@@ -306,7 +320,7 @@ export class MysqlDbHandler extends BaseDbHandler {
 
     await this.execute(
       `
-        INSERT INTO events (block_number, transaction_hash, from_address, event_index, keys, data)
+        INSERT INTO events (block_number, transaction_hash, from_address, event_index, \`keys\`, \`data\`)
         VALUES (?, ?, ?, ?, ?, ?)
       `,
       [
