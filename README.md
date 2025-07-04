@@ -5,7 +5,7 @@
 
 # Auco
 
-A TypeScript/Node.js indexer for Starknet events, supporting PostgreSQL and real-time event handling via WebSocket and RPC.
+A TypeScript/Node.js indexer for Starknet events, supporting PostgreSQL, SQLite, and real-time event handling via WebSocket and RPC.
 
 ## Features
 
@@ -44,7 +44,9 @@ npm run build
 
 ## Quick Start
 
-See [`example/index.ts`](./example/index.ts) for a minimal working example.
+### PostgreSQL Example
+
+See [`example/index.ts`](./example/index.ts) for a PostgreSQL-based example.
 
 ```typescript
 import { StarknetIndexer, LogLevel } from 'auco';
@@ -53,7 +55,9 @@ import { abi as myContractAbi } from './myContractAbi'; // Provide your contract
 const indexer = new StarknetIndexer({
   rpcNodeUrl: 'https://starknet-mainnet.infura.io/v3/YOUR_KEY',
   wsNodeUrl: 'wss://starknet-mainnet.infura.io/ws/v3/YOUR_KEY',
-  databaseUrl: 'postgresql://user:password@localhost:5432/mydb',
+  database: new PostgresDbHandler({
+    connectionString: 'postgresql://user:password@localhost:5432/mydb',
+  }),
   contractAddresses: ['0x...'],
   logLevel: LogLevel.INFO,
 });
@@ -71,9 +75,10 @@ indexer.onEvent({
 indexer.start();
 ```
 
-## Running the Example
+### SQLite Example
 
 1. **Setup PostgreSQL database**:
+
    ```bash
    createdb starknet_indexer
    ```
@@ -89,14 +94,14 @@ indexer.start();
 
 ## Configuration
 
-| Option | Type | Required | Description |
-|--------|------|----------|-------------|
-| `rpcNodeUrl` | `string` | ✅ | Starknet RPC endpoint |
-| `wsNodeUrl` | `string` | ✅ | Starknet WebSocket endpoint |
-| `databaseUrl` | `string` | ✅ | PostgreSQL connection string |
-| `contractAddresses` | `string[]` | ❌ | Array of contract addresses to index |
-| `logLevel` | `LogLevel` | ❌ | Log verbosity (DEBUG, INFO, WARN, ERROR) |
-| `startingBlockNumber` | `number \| 'latest'` | ❌ | Starting block number for indexing |
+| Option                | Type                 | Required | Description                              |
+| --------------------- | -------------------- | -------- | ---------------------------------------- |
+| `rpcNodeUrl`          | `string`             | ✅       | Starknet RPC endpoint                    |
+| `wsNodeUrl`           | `string`             | ✅       | Starknet WebSocket endpoint              |
+| `databaseUrl`         | `string`             | ✅       | PostgreSQL connection string             |
+| `contractAddresses`   | `string[]`           | ❌       | Array of contract addresses to index     |
+| `logLevel`            | `LogLevel`           | ❌       | Log verbosity (DEBUG, INFO, WARN, ERROR) |
+| `startingBlockNumber` | `number \| 'latest'` | ❌       | Starting block number for indexing       |
 
 ## Handling Chain Reorgs
 
@@ -139,6 +144,7 @@ npm run build         # Compile TypeScript
 ## Roadmap
 
 ### 📋 Planned
+
 - [ ] Additional database (MongoDB, MySQL, etc.)
 - [ ] Built-in monitoring and health checks
 - [ ] Advanced caching layer
@@ -154,20 +160,23 @@ We welcome contributions! Please see our [Contributing Guide](CONTRIBUTING.md) f
 
 1. **Fork and clone** the repository
 2. **Install dependencies**:
+
    ```bash
    npm install
    ```
 
 3. **Setup development environment**:
+
    ```bash
    # Start local PostgreSQL (if using Docker)
    docker run --name postgres-dev -e POSTGRES_PASSWORD=postgres -p 5432:5432 -d postgres:13
-   
+
    # Start local Starknet devnet
    npm run chain
    ```
 
 4. **Run tests**:
+
    ```bash
    npm test
    ```
@@ -185,12 +194,12 @@ We welcome contributions! Please see our [Contributing Guide](CONTRIBUTING.md) f
 
 ### Common Issues
 
-| Issue | Solution |
-|-------|----------|
-| PostgreSQL connection failed | Ensure PostgreSQL is running and accessible |
-| WebSocket connection failed | Verify your node supports WebSocket connections |
-| ABI parsing errors | Check your ABI file and event names |
-| Memory usage high | Consider processing events in smaller batches |
+| Issue                        | Solution                                        |
+| ---------------------------- | ----------------------------------------------- |
+| PostgreSQL connection failed | Ensure PostgreSQL is running and accessible     |
+| WebSocket connection failed  | Verify your node supports WebSocket connections |
+| ABI parsing errors           | Check your ABI file and event names             |
+| Memory usage high            | Consider processing events in smaller batches   |
 
 ### Getting Help
 

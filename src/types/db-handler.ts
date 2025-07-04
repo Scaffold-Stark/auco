@@ -23,3 +23,7 @@ export interface EventData {
 export interface PostgresDbHandlerConfig {
   connectionString: string;
 }
+
+export interface SqliteDbHandlerConfig {
+  dbPath: string;
+}

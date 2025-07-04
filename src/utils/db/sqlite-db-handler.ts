@@ -1,13 +1,20 @@
 import Database from 'better-sqlite3';
-import type { BlockData, EventData, IndexerState } from '../../types/db-handler';
+import type {
+  BlockData,
+  EventData,
+  IndexerState,
+  SqliteDbHandlerConfig,
+} from '../../types/db-handler';
 import { BaseDbHandler } from './base-db-handler';
 
 export class SqliteDbHandler extends BaseDbHandler {
   private db?: Database.Database;
+  private dbPath: string;
   private inTransaction = false;
 
-  constructor(private dbPath: string) {
+  constructor(private config: SqliteDbHandlerConfig) {
     super();
+    this.dbPath = config.dbPath;
   }
 
   async initializeDb(): Promise<void> {
