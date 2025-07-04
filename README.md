@@ -5,7 +5,7 @@
 
 # Auco
 
-A TypeScript/Node.js indexer for Starknet events, supporting PostgreSQL and real-time event handling via WebSocket and RPC.
+A TypeScript/Node.js indexer for Starknet events, supporting PostgreSQL and real-time event handling via WebSocket and RPC. 
 
 ## Features
 
