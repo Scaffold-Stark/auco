@@ -44,12 +44,12 @@ This project and everyone participating in it is governed by our Code of Conduct
 1. Fork the repository on GitHub
 2. Clone your fork locally:
    ```bash
-   git clone https://github.com/YOUR_USERNAME/starknet-js-indexer.git
-   cd starknet-js-indexer
+   git clone https://github.com/YOUR_USERNAME/auco.git
+   cd auco
    ```
 3. Add the upstream repository:
    ```bash
-   git remote add upstream https://github.com/Quantum3-Labs/starknet-js-indexer.git
+   git remote add upstream https://github.com/Quantum3-Labs/auco.git
    ```
 
 ## Development Setup
@@ -357,15 +357,15 @@ Any additional context, use cases, or examples
 ## Getting Help
 
 - 📖 **Documentation**: Check the [README](README.md)
-- 🐛 **Issues**: Search existing [GitHub Issues](https://github.com/Quantum3-Labs/starknet-js-indexer/issues)
-- 💬 **Discussions**: Join [GitHub Discussions](https://github.com/Quantum3-Labs/starknet-js-indexer/discussions)
+- 🐛 **Issues**: Search existing [GitHub Issues](https://github.com/Quantum3-Labs/auco/issues)
+- 💬 **Discussions**: Join [GitHub Discussions](https://github.com/Quantum3-Labs/auco/discussions)
 - 📧 **Email**: Contact maintainers directly for sensitive issues
 
 ## Recognition
 
 Contributors will be recognized in:
 
-- [Contributors list](https://github.com/Quantum3-Labs/starknet-js-indexer/graphs/contributors)
+- [Contributors list](https://github.com/Quantum3-Labs/auco/graphs/contributors)
 - Release notes for significant contributions
 - Project documentation for major features
 

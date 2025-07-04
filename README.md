@@ -1,4 +1,4 @@
-[![CI](https://github.com/Quantum3-Labs/starknet-js-indexer/actions/workflows/ci.yaml/badge.svg)](https://github.com/Quantum3-Labs/starknet-js-indexer/actions/workflows/ci.yaml)
+[![CI](https://github.com/Quantum3-Labs/auco/actions/workflows/ci.yaml/badge.svg)](https://github.com/Quantum3-Labs/auco/actions/workflows/ci.yaml)
 [![npm version](https://badge.fury.io/js/auco.svg)](https://badge.fury.io/js/auco)
 [![TypeScript](https://img.shields.io/badge/TypeScript-5.0-blue.svg)](https://www.typescriptlang.org/)
 [![License](https://img.shields.io/badge/License-MIT-green.svg)](LICENSE)
@@ -28,8 +28,8 @@ npm install auco
 ### From source
 
 ```bash
-git clone https://github.com/Quantum3-Labs/starknet-js-indexer.git
-cd starknet-js-indexer
+git clone https://github.com/Quantum3-Labs/auco.git
+cd auco
 npm install
 npm run build
 ```
@@ -195,8 +195,8 @@ We welcome contributions! Please see our [Contributing Guide](CONTRIBUTING.md) f
 ### Getting Help
 
 - 📖 **Documentation**: Check the [API Reference](docs/API.md)
-- 🐛 **Issues**: Report bugs on [GitHub Issues](https://github.com/Quantum3-Labs/starknet-js-indexer/issues)
-- 💬 **Discussions**: Join our [GitHub Discussions](https://github.com/Quantum3-Labs/starknet-js-indexer/discussions)
+- 🐛 **Issues**: Report bugs on [GitHub Issues](https://github.com/Quantum3-Labs/auco/issues)
+- 💬 **Discussions**: Join our [GitHub Discussions](https://github.com/Quantum3-Labs/auco/discussions)
 
 ## License
 
