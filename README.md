@@ -9,7 +9,7 @@ A TypeScript/Node.js indexer for Starknet events, supporting PostgreSQL and real
 
 ## Features
 
-- 🔄 **Real-time Event Indexing**: Listen to StarkNet events from specified contracts
+- 🔄 **Real-time Event Indexing**: Listen to Starknet events from specified contracts
 - 💾 **Data Persistence**: Store events and block data in PostgreSQL
 - 🔄 **Chain Reorg Handling**: Detect and handle blockchain reorganizations gracefully
 - 🔌 **Extensible Architecture**: Register custom event handlers for any contract
@@ -38,9 +38,9 @@ npm run build
 
 - **Node.js**: Version 18 or higher
 - **PostgreSQL**: Version 12 or higher
-- **WebSocket endpoint**: StarkNet node with WebSocket support (e.g., Infura, local node with WS enabled)
-- **StarkNet node spec version 0.8 or above**: Compatible with StarkNet nodes running spec version 0.8+
-- **How to install a StarkNet node?** See the quick guide in [CONTRIBUTING.md](CONTRIBUTING.md#prerequisites).
+- **WebSocket endpoint**: Starknet node with WebSocket support (e.g., Infura, local node with WS enabled)
+- **Starknet node spec version 0.8 or above**: Compatible with Starknet nodes running spec version 0.8+
+- **How to install a Starknet node?** See the quick guide in [CONTRIBUTING.md](CONTRIBUTING.md#prerequisites).
 
 ## Quick Start
 
@@ -91,8 +91,8 @@ indexer.start();
 
 | Option | Type | Required | Description |
 |--------|------|----------|-------------|
-| `rpcNodeUrl` | `string` | ✅ | StarkNet RPC endpoint |
-| `wsNodeUrl` | `string` | ✅ | StarkNet WebSocket endpoint |
+| `rpcNodeUrl` | `string` | ✅ | Starknet RPC endpoint |
+| `wsNodeUrl` | `string` | ✅ | Starknet WebSocket endpoint |
 | `databaseUrl` | `string` | ✅ | PostgreSQL connection string |
 | `contractAddresses` | `string[]` | ❌ | Array of contract addresses to index |
 | `logLevel` | `LogLevel` | ❌ | Log verbosity (DEBUG, INFO, WARN, ERROR) |
@@ -163,7 +163,7 @@ We welcome contributions! Please see our [Contributing Guide](CONTRIBUTING.md) f
    # Start local PostgreSQL (if using Docker)
    docker run --name postgres-dev -e POSTGRES_PASSWORD=postgres -p 5432:5432 -d postgres:13
    
-   # Start local StarkNet devnet
+   # Start local Starknet devnet
    npm run chain
    ```
 
@@ -204,6 +204,6 @@ This project is licensed under the MIT License - see the [LICENSE](LICENSE) file
 
 ## Acknowledgments
 
-- Built with [StarkNet.js](https://github.com/0xs34n/starknet.js)
+- Built with [Starknet.js](https://github.com/0xs34n/starknet.js)
 - Type-safe ABI parsing with [abi-wan-kanabi](https://github.com/keep-starknet-strange/abi-wan-kanabi)
 - Database operations with [node-postgres](https://github.com/brianc/node-postgres)
