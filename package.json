@@ -16,6 +16,7 @@
     "@types/better-sqlite3": "^7.6.13",
     "abi-wan-kanabi": "2.2.4",
     "better-sqlite3": "^12.2.0",
+    "mysql2": "^3.14.1",
     "patch-package": "^8.0.0",
     "pg": "^8.11.0",
     "starknet": "^7.1.0"

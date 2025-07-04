@@ -27,3 +27,7 @@ export interface PostgresDbHandlerConfig {
 export interface SqliteDbHandlerConfig {
   dbPath: string;
 }
+
+export interface MysqlDbHandlerConfig {
+  connectionString: string;
+}
