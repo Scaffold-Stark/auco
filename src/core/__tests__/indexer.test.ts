@@ -1,5 +1,45 @@
 import { universalErc20Abi } from '../../../test-utils/constants';
 import { StarknetIndexer } from '../../index';
+import { BaseDbHandler } from '../../utils/db/base-db-handler';
+import { BlockData, EventData, IndexerState } from '../../types/db-handler';
+
+// Mock implementation of BaseDbHandler for testing
+class MockDbHandler extends BaseDbHandler {
+  async initializeDb(): Promise<void> {}
+  async connect(): Promise<void> {}
+  async disconnect(): Promise<void> {}
+  isConnected(): boolean {
+    return true;
+  }
+  async getIndexerState(_cursorKey?: string): Promise<IndexerState | null> {
+    return null;
+  }
+  async initializeIndexerState(_startingBlock: number, _cursorKey?: string): Promise<void> {}
+  async updateCursor(
+    _blockNumber: number,
+    _blockHash: string,
+    _cursorKey?: string
+  ): Promise<void> {}
+  async insertBlock(_blockData: BlockData): Promise<void> {}
+  async batchInsertBlocks(_blocks: BlockData[]): Promise<void> {}
+  async checkIsBlockProcessed(_blockNumber: number): Promise<boolean> {
+    return false;
+  }
+  async getBlockByNumber(_blockNumber: number): Promise<BlockData | null> {
+    return null;
+  }
+  async getBlockByParentHash(_parentHash: string): Promise<BlockData | null> {
+    return null;
+  }
+  async deleteBlock(_blockHash: string): Promise<void> {}
+  async deleteEventsByBlockNumber(_blockNumber: number): Promise<void> {}
+  async beginTransaction(): Promise<void> {}
+  async commitTransaction(): Promise<void> {}
+  async rollbackTransaction(): Promise<void> {}
+  async insertEvent(_eventData: EventData): Promise<void> {}
+  async query(_query: string, _params: any[]): Promise<any> {}
+  async cleanup(): Promise<void> {}
+}
 
 describe('StarknetIndexer', () => {
   // Global cleanup to ensure Jest exits properly
@@ -8,20 +48,22 @@ describe('StarknetIndexer', () => {
     await new Promise((resolve) => setTimeout(resolve, 100));
   });
   it('should instantiate with minimal config', () => {
+    const mockDatabase = new MockDbHandler();
     const indexer = new StarknetIndexer({
       rpcNodeUrl: 'http://localhost:9944',
       wsNodeUrl: 'ws://localhost:9945',
-      databaseUrl: 'postgresql://user:password@localhost:5432/testdb',
+      database: mockDatabase,
       startingBlockNumber: 0,
     });
     expect(indexer).toBeInstanceOf(StarknetIndexer);
   });
 
   it('should throw error if onEvent is called without contractAddress', async () => {
+    const mockDatabase = new MockDbHandler();
     const indexer = new StarknetIndexer({
       rpcNodeUrl: 'http://localhost:9944',
       wsNodeUrl: 'ws://localhost:9945',
-      databaseUrl: 'postgresql://user:password@localhost:5432/testdb',
+      database: mockDatabase,
       startingBlockNumber: 0,
     });
     await expect(
@@ -35,10 +77,11 @@ describe('StarknetIndexer', () => {
   });
 
   it('should call stop without throwing', async () => {
+    const mockDatabase = new MockDbHandler();
     const indexer = new StarknetIndexer({
       rpcNodeUrl: 'http://localhost:9944',
       wsNodeUrl: 'ws://localhost:9945',
-      databaseUrl: 'postgresql://user:password@localhost:5432/testdb',
+      database: mockDatabase,
       startingBlockNumber: 0,
     });
     await expect(indexer.stop()).resolves.not.toThrow();
@@ -49,7 +92,6 @@ describe('StarknetIndexer', () => {
     let mockDbHandler: any;
     let mockProvider: any;
     const contractAddress = '0x4718F5A0FC34CC1AF16A1CDEE98FFB20C31F5CD61D6AB07201858F4287C938D';
-    const testDatabaseUrl = 'postgresql://postgres:postgres@localhost:5432/test_starknet_indexer';
 
     beforeEach(() => {
       // Mock database handler
@@ -84,7 +126,7 @@ describe('StarknetIndexer', () => {
       mockIndexer = new StarknetIndexer({
         rpcNodeUrl: 'http://127.0.0.1:5050',
         wsNodeUrl: 'ws://127.0.0.1:5050/ws',
-        databaseUrl: testDatabaseUrl,
+        database: mockDbHandler,
         startingBlockNumber: 1,
         contractAddresses: [contractAddress],
       });
