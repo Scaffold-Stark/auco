@@ -1,4 +1,4 @@
-import { MysqlDbHandler, StarknetIndexer, LogLevel } from '../src/index';
+import { StarknetIndexer, LogLevel } from '../src/index';
 import abi from './abi/ABI';
 
 const indexer = new StarknetIndexer({
@@ -7,9 +7,12 @@ const indexer = new StarknetIndexer({
   wsNodeUrl: 'wss://starknet-sepolia-rpc.publicnode.com',
 
   // Change your database connection string here if needed
-  database: new MysqlDbHandler({
-    connectionString: 'mysql://root:root@localhost:3306/starknet_indexer',
-  }),
+  database: {
+    type: 'mysql',
+    config: {
+      connectionString: 'mysql://root:root@localhost:3306/starknet_indexer',
+    },
+  },
 
   logLevel: LogLevel.INFO,
   startingBlockNumber: 'latest',

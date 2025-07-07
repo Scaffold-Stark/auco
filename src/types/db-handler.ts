@@ -31,3 +31,5 @@ export interface SqliteDbHandlerConfig {
 export interface MysqlDbHandlerConfig {
   connectionString: string;
 }
+
+export type DbHandlerType = 'postgres' | 'mysql' | 'sqlite';

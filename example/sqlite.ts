@@ -1,4 +1,4 @@
-import { StarknetIndexer, LogLevel, SqliteDbHandler } from '../src/index';
+import { StarknetIndexer, LogLevel } from '../src/index';
 import abi from './abi/ABI';
 
 const indexer = new StarknetIndexer({
@@ -7,9 +7,12 @@ const indexer = new StarknetIndexer({
   wsNodeUrl: 'wss://starknet-sepolia-rpc.publicnode.com',
 
   // Change your database connection string here if needed
-  database: new SqliteDbHandler({
-    dbPath: 'starknet_indexer.db',
-  }),
+  database: {
+    type: 'sqlite',
+    config: {
+      dbPath: 'starknet_indexer.db',
+    },
+  },
 
   logLevel: LogLevel.INFO,
   startingBlockNumber: 'latest',

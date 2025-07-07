@@ -22,6 +22,7 @@ import {
   QueuedBlock,
 } from '../types/indexer';
 import { BaseDbHandler } from '../utils/db/base-db-handler';
+import { initializeDbHandler } from '../utils/db/helpers/initialize-db-handler';
 
 export class StarknetIndexer {
   private wsChannel: WebSocketChannel;
@@ -54,7 +55,7 @@ export class StarknetIndexer {
       nodeUrl: config.wsNodeUrl,
     });
 
-    this.dbHandler = config.database;
+    this.dbHandler = initializeDbHandler(config.database.type, config.database.config);
 
     if (config.contractAddresses) {
       config.contractAddresses.forEach((address) => {

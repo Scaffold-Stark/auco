@@ -56,10 +56,12 @@ import { abi as myContractAbi } from './myContractAbi'; // Provide your contract
 const indexer = new StarknetIndexer({
   rpcNodeUrl: 'https://starknet-mainnet.infura.io/v3/YOUR_KEY',
   wsNodeUrl: 'wss://starknet-mainnet.infura.io/ws/v3/YOUR_KEY',
-  database: new PostgresDbHandler({
-    connectionString: 'postgresql://user:password@localhost:5432/mydb',
-  }),
-  contractAddresses: ['0x...'],
+  database: {
+    type: 'postgres',
+    config: {
+      connectionString: 'postgresql://user:password@localhost:5432/mydb',
+    },
+  },
   logLevel: LogLevel.INFO,
 });
 
@@ -78,66 +80,65 @@ indexer.start();
 
 ### SQLite Example
 
-1. **Setup SQLite database**:
-
-   ```bash
-   createdb starknet_indexer
-   ```
-
-2. **Configure your environment**:
-   - Edit `example/index.ts` with your node URLs and contract address
-   - Update your database config and handler to SQLite
-
-   ```typescript
-   const indexer = new StarknetIndexer({
-     rpcNodeUrl: 'https://starknet-mainnet.infura.io/v3/YOUR_KEY',
-     wsNodeUrl: 'wss://starknet-mainnet.infura.io/ws/v3/YOUR_KEY',
-     database: new SqliteDbHandler({
-       dbPath: 'starknet_indexer.db',
-     }),
-     contractAddresses: ['0x...'],
-     logLevel: LogLevel.INFO,
-   });
-   ```
-
-3. **Run the example**:
-   ```bash
-   npx ts-node example/index.ts
-   ```
-
-### MySQL Example
-
 1. **Configure your environment**:
-   - Edit `example/index.ts` with your node URLs and contract address
-   - Update your database config and handler to MySQL
+   - Edit `example/sqlite.ts` with your node URLs and contract address
+   - Update your database config to SQLite
 
    ```typescript
    const indexer = new StarknetIndexer({
-     rpcNodeUrl: 'https://starknet-mainnet.infura.io/v3/YOUR_KEY',
-     wsNodeUrl: 'wss://starknet-mainnet.infura.io/ws/v3/YOUR_KEY',
-     database: new MysqlDbHandler({
-       connectionString: 'mysql://root:root@localhost:3306/starknet_indexer',
-     }),
-     contractAddresses: ['0x...'],
+     rpcNodeUrl: 'https://starknet-sepolia-rpc.publicnode.com',
+     wsNodeUrl: 'wss://starknet-sepolia-rpc.publicnode.com',
+     database: {
+       type: 'sqlite',
+       config: {
+         dbPath: 'starknet_indexer.db',
+       },
+     },
      logLevel: LogLevel.INFO,
+     startingBlockNumber: 'latest',
    });
    ```
 
 2. **Run the example**:
    ```bash
-   npx ts-node example/index.ts
+   npx ts-node example/sqlite.ts
+   ```
+
+### MySQL Example
+
+1. **Configure your environment**:
+   - Edit `example/mysql.ts` with your node URLs and contract address
+   - Update your database config to MySQL
+
+   ```typescript
+   const indexer = new StarknetIndexer({
+     rpcNodeUrl: 'https://starknet-sepolia-rpc.publicnode.com',
+     wsNodeUrl: 'wss://starknet-sepolia-rpc.publicnode.com',
+     database: {
+       type: 'mysql',
+       config: {
+         connectionString: 'mysql://root:root@localhost:3306/starknet_indexer',
+       },
+     },
+     logLevel: LogLevel.INFO,
+     startingBlockNumber: 'latest',
+   });
+   ```
+
+2. **Run the example**:
+   ```bash
+   npx ts-node example/mysql.ts
    ```
 
 ## Configuration
 
-| Option                | Type                 | Required | Description                                                           |
-| --------------------- | -------------------- | -------- | --------------------------------------------------------------------- |
-| `rpcNodeUrl`          | `string`             | ✅       | Starknet RPC endpoint                                                 |
-| `wsNodeUrl`           | `string`             | ✅       | Starknet WebSocket endpoint                                           |
-| `database`            | `BaseDbHandler`      | ✅       | Handler Instance of the database used, you can find usage on examples |
-| `contractAddresses`   | `string[]`           | ❌       | Array of contract addresses to index                                  |
-| `logLevel`            | `LogLevel`           | ❌       | Log verbosity (DEBUG, INFO, WARN, ERROR)                              |
-| `startingBlockNumber` | `number \| 'latest'` | ❌       | Starting block number for indexing                                    |
+| Option                | Type                 | Required | Description                                                   |
+| --------------------- | -------------------- | -------- | ------------------------------------------------------------- |
+| `rpcNodeUrl`          | `string`             | ✅       | Starknet RPC endpoint                                         |
+| `wsNodeUrl`           | `string`             | ✅       | Starknet WebSocket endpoint                                   |
+| `database`            | `object`             | ✅       | Database configuration object with type and config properties |
+| `logLevel`            | `LogLevel`           | ❌       | Log verbosity (DEBUG, INFO, WARN, ERROR)                      |
+| `startingBlockNumber` | `number \| 'latest'` | ❌       | Starting block number for indexing                            |
 
 ## Handling Chain Reorgs
 
