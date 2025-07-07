@@ -130,14 +130,14 @@ indexer.start();
 
 ## Configuration
 
-| Option                | Type                 | Required | Description                              |
-| --------------------- | -------------------- | -------- | ---------------------------------------- |
-| `rpcNodeUrl`          | `string`             | ✅       | Starknet RPC endpoint                    |
-| `wsNodeUrl`           | `string`             | ✅       | Starknet WebSocket endpoint              |
-| `databaseUrl`         | `string`             | ✅       | PostgreSQL connection string             |
-| `contractAddresses`   | `string[]`           | ❌       | Array of contract addresses to index     |
-| `logLevel`            | `LogLevel`           | ❌       | Log verbosity (DEBUG, INFO, WARN, ERROR) |
-| `startingBlockNumber` | `number \| 'latest'` | ❌       | Starting block number for indexing       |
+| Option                | Type                 | Required | Description                                                           |
+| --------------------- | -------------------- | -------- | --------------------------------------------------------------------- |
+| `rpcNodeUrl`          | `string`             | ✅       | Starknet RPC endpoint                                                 |
+| `wsNodeUrl`           | `string`             | ✅       | Starknet WebSocket endpoint                                           |
+| `database`            | `BaseDbHandler`      | ✅       | Handler Instance of the database used, you can find usage on examples |
+| `contractAddresses`   | `string[]`           | ❌       | Array of contract addresses to index                                  |
+| `logLevel`            | `LogLevel`           | ❌       | Log verbosity (DEBUG, INFO, WARN, ERROR)                              |
+| `startingBlockNumber` | `number \| 'latest'` | ❌       | Starting block number for indexing                                    |
 
 ## Handling Chain Reorgs
 
