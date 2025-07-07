@@ -16,6 +16,7 @@ A TypeScript/Node.js indexer for Starknet events, supporting PostgreSQL, SQLite,
 - 🛡️ **Type Safety**: Full TypeScript support with type-safe event handling
 - 🔄 **Retry Logic**: Automatic retry mechanisms with exponential backoff
 - 📊 **Historical Processing**: Process historical blocks with seamless real-time transition
+- 🔌 **Multiple DB Support**: Supports PostgreSQL, SQLite, and MySQL out of the box.
 
 ## Installation
 
@@ -37,7 +38,7 @@ npm run build
 ## Requirements
 
 - **Node.js**: Version 18 or higher
-- **PostgreSQL**: Version 12 or higher
+- **PostgreSQL**: Version 12 or higher (can be switched with SQLite or MySQL)
 - **WebSocket endpoint**: Starknet node with WebSocket support (e.g., Infura, local node with WS enabled)
 - **Starknet node spec version 0.8 or above**: Compatible with Starknet nodes running spec version 0.8+
 - **How to install a Starknet node?** See the quick guide in [CONTRIBUTING.md](CONTRIBUTING.md#prerequisites).
@@ -77,7 +78,7 @@ indexer.start();
 
 ### SQLite Example
 
-1. **Setup PostgreSQL database**:
+1. **Setup SQLite database**:
 
    ```bash
    createdb starknet_indexer
@@ -85,9 +86,44 @@ indexer.start();
 
 2. **Configure your environment**:
    - Edit `example/index.ts` with your node URLs and contract address
-   - Update the PostgreSQL connection string
+   - Update your database config and handler to SQLite
+
+   ```typescript
+   const indexer = new StarknetIndexer({
+     rpcNodeUrl: 'https://starknet-mainnet.infura.io/v3/YOUR_KEY',
+     wsNodeUrl: 'wss://starknet-mainnet.infura.io/ws/v3/YOUR_KEY',
+     database: new SqliteDbHandler({
+       dbPath: 'starknet_indexer.db',
+     }),
+     contractAddresses: ['0x...'],
+     logLevel: LogLevel.INFO,
+   });
+   ```
 
 3. **Run the example**:
+   ```bash
+   npx ts-node example/index.ts
+   ```
+
+### MySQL Example
+
+1. **Configure your environment**:
+   - Edit `example/index.ts` with your node URLs and contract address
+   - Update your database config and handler to MySQL
+
+   ```typescript
+   const indexer = new StarknetIndexer({
+     rpcNodeUrl: 'https://starknet-mainnet.infura.io/v3/YOUR_KEY',
+     wsNodeUrl: 'wss://starknet-mainnet.infura.io/ws/v3/YOUR_KEY',
+     database: new MysqlDbHandler({
+       connectionString: 'mysql://root:root@localhost:3306/starknet_indexer',
+     }),
+     contractAddresses: ['0x...'],
+     logLevel: LogLevel.INFO,
+   });
+   ```
+
+2. **Run the example**:
    ```bash
    npx ts-node example/index.ts
    ```
@@ -215,4 +251,4 @@ This project is licensed under the MIT License - see the [LICENSE](LICENSE) file
 
 - Built with [Starknet.js](https://github.com/0xs34n/starknet.js)
 - Type-safe ABI parsing with [abi-wan-kanabi](https://github.com/keep-starknet-strange/abi-wan-kanabi)
-- Database operations with [node-postgres](https://github.com/brianc/node-postgres)
+- Database operations with [node-postgres](https://github.com/brianc/node-postgres), [mysql2](https://github.com/sidorares/node-mysql2), and [better-sqlite3](https://github.com/WiseLibs/better-sqlite3)
