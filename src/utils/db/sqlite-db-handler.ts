@@ -256,42 +256,59 @@ export class SqliteDbHandler extends BaseDbHandler {
 
   // Transaction management
   async beginTransaction(): Promise<void> {
-    if (!this.db) {
-      throw new Error('Database not initialized');
-    }
+    try {
+      if (!this.db) {
+        throw new Error('Database not initialized');
+      }
 
-    if (this.inTransaction) {
-      throw new Error('Transaction already in progress');
-    }
+      if (this.inTransaction) {
+        throw new Error('Transaction already in progress');
+      }
 
-    this.db.exec('BEGIN TRANSACTION');
-    this.inTransaction = true;
+      this.db.exec('BEGIN TRANSACTION');
+      this.inTransaction = true;
+    } catch (error) {
+      console.error('Error beginning transaction:', error);
+      this.inTransaction = false;
+      throw error;
+    }
   }
 
   async commitTransaction(): Promise<void> {
-    if (!this.db) {
-      throw new Error('Database not initialized');
-    }
+    try {
+      if (!this.db) {
+        throw new Error('Database not initialized');
+      }
 
-    if (!this.inTransaction) {
-      throw new Error('No transaction in progress');
-    }
+      if (!this.inTransaction) {
+        throw new Error('No transaction in progress');
+      }
 
-    this.db.exec('COMMIT');
-    this.inTransaction = false;
+      this.db.exec('COMMIT');
+    } catch (error) {
+      console.error('Error committing transaction:', error);
+      throw error;
+    } finally {
+      this.inTransaction = false;
+    }
   }
 
   async rollbackTransaction(): Promise<void> {
-    if (!this.db) {
-      throw new Error('Database not initialized');
-    }
+    try {
+      if (!this.db) {
+        throw new Error('Database not initialized');
+      }
 
-    if (!this.inTransaction) {
-      throw new Error('No transaction in progress');
-    }
+      if (!this.inTransaction) {
+        throw new Error('No transaction in progress');
+      }
 
-    this.db.exec('ROLLBACK');
-    this.inTransaction = false;
+      this.db.exec('ROLLBACK');
+      this.inTransaction = false;
+    } catch (error) {
+      console.error('Error rolling back transaction:', error);
+      throw error;
+    }
   }
 
   // Event operations
