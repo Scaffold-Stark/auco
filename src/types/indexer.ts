@@ -101,7 +101,21 @@ export type EventHandler<TAbi extends Abi, TEventName extends string> = (
   indexer: StarknetIndexer
 ) => Promise<void>;
 
-export interface EventHandlerParams<TAbi extends Abi, TEventName extends string> {
+// Extract only struct event names from ABI - provides intellisense for event names
+type ExtractStructEventNames<TAbi extends Abi> = {
+  [K in keyof TAbi]: TAbi[K] extends {
+    type: 'event';
+    kind: 'struct';
+    name: infer TName extends string;
+  }
+    ? TName
+    : never;
+}[number];
+
+export interface EventHandlerParams<
+  TAbi extends Abi,
+  TEventName extends ExtractStructEventNames<TAbi>,
+> {
   contractAddress: string;
   abi: TAbi;
   eventName: TEventName;

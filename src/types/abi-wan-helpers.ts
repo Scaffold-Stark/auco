@@ -1,8 +1,8 @@
 import type { Abi } from 'abi-wan-kanabi';
 import type {
   AbiEventMember,
-  ExtractAbiEventNames,
   StringToPrimitiveType,
+  ExtractAbiEventNames,
 } from 'abi-wan-kanabi/kanabi';
 
 export type AbiEventStruct = {
@@ -76,35 +76,19 @@ export type VariantToTaggedUnion<
     : never; // Should not happen for valid ABIs
 
 // Main type to convert an event definition to its TS representation.
-// This version prioritizes exact struct event matches over enum events
+// This implementation only looks for struct events, ignoring enum events completely
 export type EventToPrimitiveType<TAbi extends Abi, TEventName extends string> = {
   [K in keyof TAbi]: TAbi[K] extends {
     type: 'event';
     name: TEventName;
-    kind: 'struct';
+    kind: 'struct'; // Only struct events
     members: infer TMembers extends readonly AbiEventMember[];
   }
     ? {
         [Member in TMembers[number] as Member['name']]: StringToPrimitiveType<TAbi, Member['type']>;
       }
     : never;
-}[number] extends infer StructResult
-  ? StructResult extends never
-    ? // Fallback to enum events if no struct found
-      {
-        [K in keyof TAbi]: TAbi[K] extends {
-          type: 'event';
-          name: TEventName;
-          kind: 'enum';
-          variants: infer TVariants extends readonly AbiEventMember[];
-        }
-          ? {
-              [Idx in keyof TVariants]: VariantToTaggedUnion<TAbi, TVariants[Idx]>;
-            }[number]
-          : never;
-      }[number]
-    : StructResult
-  : never;
+}[number];
 
 export function isEventAbi(item: AbiItem): item is AbiEvent {
   return item.type === 'event';

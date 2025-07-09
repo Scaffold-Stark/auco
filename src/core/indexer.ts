@@ -25,6 +25,17 @@ import {
 import { BaseDbHandler } from '../utils/db/base-db-handler';
 import { initializeDbHandler } from '../utils/db/helpers/initialize-db-handler';
 
+// Extract only struct event names from ABI - provides intellisense for event names
+type ExtractStructEventNames<TAbi extends Abi> = {
+  [K in keyof TAbi]: TAbi[K] extends {
+    type: 'event';
+    kind: 'struct';
+    name: infer TName extends string;
+  }
+    ? TName
+    : never;
+}[number];
+
 export class StarknetIndexer {
   private wsChannel: WebSocketChannel;
   private eventHandlers: Map<string, BaseEventHandlerConfig[]> = new Map();
@@ -256,7 +267,7 @@ export class StarknetIndexer {
   }
 
   // Register an event handler for a contract address with optional event name
-  public async onEvent<TAbi extends Abi, TEventName extends string>(
+  public async onEvent<TAbi extends Abi, TEventName extends ExtractStructEventNames<TAbi>>(
     params: EventHandlerParams<TAbi, TEventName>
   ): Promise<void> {
     const { contractAddress, eventName, abi, handler } = params;
