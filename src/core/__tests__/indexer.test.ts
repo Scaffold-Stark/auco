@@ -36,7 +36,7 @@ describe('StarknetIndexer', () => {
         handler: jest.fn(),
         contractAddress: '',
         abi: universalErc20Abi,
-        eventName: 'src::strk::erc20_lockable::ERC20Lockable::Event',
+        eventName: 'src::strk::erc20_lockable::ERC20Lockable::Transfer',
       })
     ).rejects.toThrow('Contract address is required');
   });
