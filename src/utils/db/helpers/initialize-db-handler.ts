@@ -30,8 +30,8 @@ export function initializeDbHandler(
       }
       return new MysqlDbHandler(config as MysqlDbHandlerConfig);
     case 'sqlite':
-      if (!('dbPath' in config)) {
-        throw new Error('Invalid config type for sqlite - missing dbPath');
+      if (!('dbInstance' in config)) {
+        throw new Error('Invalid config type for sqlite - missing dbInstance');
       }
       return new SqliteDbHandler(config as SqliteDbHandlerConfig);
   }

@@ -8,13 +8,12 @@ import type {
 import { BaseDbHandler } from './base-db-handler';
 
 export class SqliteDbHandler extends BaseDbHandler {
-  private db?: Database.Database;
-  private dbPath: string;
+  private db: Database.Database;
   private inTransaction = false;
 
   constructor(private config: SqliteDbHandlerConfig) {
     super();
-    this.dbPath = config.dbPath;
+    this.db = config.dbInstance;
   }
 
   async initializeDb(): Promise<void> {
@@ -57,8 +56,6 @@ export class SqliteDbHandler extends BaseDbHandler {
   }
 
   async connect(): Promise<void> {
-    this.db = new Database(this.dbPath);
-
     // Enable foreign keys (SQLite has them disabled by default)
     this.db.pragma('foreign_keys = ON');
 
@@ -68,7 +65,6 @@ export class SqliteDbHandler extends BaseDbHandler {
   async disconnect(): Promise<void> {
     if (this.db) {
       this.db.close();
-      this.db = undefined;
     }
   }
 
@@ -359,7 +355,6 @@ export class SqliteDbHandler extends BaseDbHandler {
       } catch (error) {
         console.error('Error closing database:', error);
       }
-      this.db = undefined;
     }
   }
 }
