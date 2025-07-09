@@ -8,10 +8,11 @@ import {
   EmittedEvent,
   WebSocketChannel,
 } from 'starknet';
-import { ExtractAbiEventNames } from 'abi-wan-kanabi/kanabi';
+
 import { groupConsecutiveBlocks } from '../utils/blockUtils';
 import {
   EventHandlerConfig,
+  BaseEventHandlerConfig,
   EventHandlerParams,
   IndexerConfig,
   Logger,
@@ -24,9 +25,20 @@ import {
 import { BaseDbHandler } from '../utils/db/base-db-handler';
 import { initializeDbHandler } from '../utils/db/helpers/initialize-db-handler';
 
+// Extract only struct event names from ABI - provides intellisense for event names
+type ExtractStructEventNames<TAbi extends Abi> = {
+  [K in keyof TAbi]: TAbi[K] extends {
+    type: 'event';
+    kind: 'struct';
+    name: infer TName extends string;
+  }
+    ? TName
+    : never;
+}[number];
+
 export class StarknetIndexer {
   private wsChannel: WebSocketChannel;
-  private eventHandlers: Map<string, EventHandlerConfig[]> = new Map();
+  private eventHandlers: Map<string, BaseEventHandlerConfig[]> = new Map();
   private reorgHandler: ReorgHandler | null = null; // using dedicated variable to avoid type conflicts
   private started: boolean = false;
   private provider?: RpcProvider;
@@ -255,7 +267,7 @@ export class StarknetIndexer {
   }
 
   // Register an event handler for a contract address with optional event name
-  public async onEvent<TAbi extends Abi, TEventName extends ExtractAbiEventNames<TAbi>>(
+  public async onEvent<TAbi extends Abi, TEventName extends ExtractStructEventNames<TAbi>>(
     params: EventHandlerParams<TAbi, TEventName>
   ): Promise<void> {
     const { contractAddress, eventName, abi, handler } = params;
@@ -274,9 +286,8 @@ export class StarknetIndexer {
     );
 
     this.contractAddresses.add(normalizedAddress);
-
-    const handlerConfig: EventHandlerConfig = {
-      handler,
+    const handlerConfig: EventHandlerConfig<TAbi, TEventName> = {
+      handler: handler,
     };
 
     if (eventName) {
@@ -681,7 +692,7 @@ export class StarknetIndexer {
           parsed: {},
         };
 
-        let handlerConfigs: EventHandlerConfig[] = [];
+        let handlerConfigs: BaseEventHandlerConfig[] = [];
 
         if (event.keys && event.keys.length > 0) {
           const eventSelector = event.keys[0];

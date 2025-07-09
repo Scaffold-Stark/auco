@@ -1,9 +1,8 @@
 import type { Abi } from 'abi-wan-kanabi';
 import type {
   AbiEventMember,
-  ExtractAbiEvent,
-  ExtractAbiEventNames,
   StringToPrimitiveType,
+  ExtractAbiEventNames,
 } from 'abi-wan-kanabi/kanabi';
 
 export type AbiEventStruct = {
@@ -76,38 +75,20 @@ export type VariantToTaggedUnion<
       EventToPrimitiveType<TAbi, TVariant['type']>
     : never; // Should not happen for valid ABIs
 
-// Main type to convert an event definition (struct or enum) to its TS representation.
-export type EventToPrimitiveType<TAbi extends Abi, TEventName extends ExtractAbiEventNames<TAbi>> =
-  ExtractAbiEvent<TAbi, TEventName> extends infer TEventDef
-    ? TEventDef extends {
-        type: 'event';
-        kind: 'struct';
-        members: infer TMembers extends readonly AbiEventMember[];
+// Main type to convert an event definition to its TS representation.
+// This implementation only looks for struct events, ignoring enum events completely
+export type EventToPrimitiveType<TAbi extends Abi, TEventName extends string> = {
+  [K in keyof TAbi]: TAbi[K] extends {
+    type: 'event';
+    name: TEventName;
+    kind: 'struct'; // Only struct events
+    members: infer TMembers extends readonly AbiEventMember[];
+  }
+    ? {
+        [Member in TMembers[number] as Member['name']]: StringToPrimitiveType<TAbi, Member['type']>;
       }
-      ? // Struct Event: A simple object with member names as keys and their primitive types as values.
-        {
-          [Member in TMembers[number] as Member['name']]: StringToPrimitiveType<
-            TAbi,
-            Member['type']
-          >;
-        }
-      : TEventDef extends {
-            type: 'event';
-            kind: 'enum';
-            variants: infer TVariants extends readonly AbiEventMember[];
-          }
-        ? // Enum Event: Create a union of all possible tagged types derived from its variants.
-          {
-            // Map each variant to its corresponding tagged union structure(s).
-            [Idx in keyof TVariants]: VariantToTaggedUnion<TAbi, TVariants[Idx]>;
-          }[number] // Indexing with [number] converts the tuple of union parts into a single union type.
-        : // Explicitly handle empty enum events to ensure the `extends never` check works reliably.
-          TEventDef extends { type: 'event'; kind: 'enum'; variants: [] }
-          ? never
-          : // Not an event definition found for TEventName -> never
-            never
-    : // If the event name is not found in the ABI, return never.
-      never;
+    : never;
+}[number];
 
 export function isEventAbi(item: AbiItem): item is AbiEvent {
   return item.type === 'event';
