@@ -1,5 +1,6 @@
 import { universalErc20Abi } from '../../../test-utils/constants';
 import { StarknetIndexer } from '../../index';
+import Database from 'better-sqlite3';
 
 describe('StarknetIndexer', () => {
   // Global cleanup to ensure Jest exits properly
@@ -13,7 +14,7 @@ describe('StarknetIndexer', () => {
       wsNodeUrl: 'ws://localhost:9945',
       database: {
         type: 'sqlite',
-        config: { dbPath: ':memory:' },
+        config: { dbInstance: new Database(':memory:') },
       },
       startingBlockNumber: 0,
     });
@@ -26,7 +27,7 @@ describe('StarknetIndexer', () => {
       wsNodeUrl: 'ws://localhost:9945',
       database: {
         type: 'sqlite',
-        config: { dbPath: ':memory:' },
+        config: { dbInstance: new Database(':memory:') },
       },
       startingBlockNumber: 0,
     });
@@ -46,7 +47,7 @@ describe('StarknetIndexer', () => {
       wsNodeUrl: 'ws://localhost:9945',
       database: {
         type: 'sqlite',
-        config: { dbPath: ':memory:' },
+        config: { dbInstance: new Database(':memory:') },
       },
       startingBlockNumber: 0,
     });
@@ -94,7 +95,7 @@ describe('StarknetIndexer', () => {
         wsNodeUrl: 'ws://127.0.0.1:5050/ws',
         database: {
           type: 'sqlite',
-          config: { dbPath: ':memory:' },
+          config: { dbInstance: new Database(':memory:') },
         },
         startingBlockNumber: 1,
         contractAddresses: [contractAddress],
