@@ -8,7 +8,6 @@ import {
   EmittedEvent,
   WebSocketChannel,
 } from 'starknet';
-import { Pool, PoolClient } from 'pg';
 import { ExtractAbiEventNames } from 'abi-wan-kanabi/kanabi';
 import { groupConsecutiveBlocks } from '../utils/blockUtils';
 import {
@@ -22,11 +21,11 @@ import {
   ConsoleLogger,
   QueuedBlock,
 } from '../types/indexer';
+import { BaseDbHandler } from '../utils/db/base-db-handler';
+import { initializeDbHandler } from '../utils/db/helpers/initialize-db-handler';
 
 export class StarknetIndexer {
   private wsChannel: WebSocketChannel;
-  private pool: Pool;
-  private client?: PoolClient;
   private eventHandlers: Map<string, EventHandlerConfig[]> = new Map();
   private reorgHandler: ReorgHandler | null = null; // using dedicated variable to avoid type conflicts
   private started: boolean = false;
@@ -38,6 +37,7 @@ export class StarknetIndexer {
   private cursor: Cursor | null = null;
   private logger: Logger;
   private pollTimeout?: NodeJS.Timeout;
+  private readonly dbHandler: BaseDbHandler;
 
   private failedBlocks: number[] = [];
   private retryTimeout?: NodeJS.Timeout;
@@ -55,9 +55,7 @@ export class StarknetIndexer {
       nodeUrl: config.wsNodeUrl,
     });
 
-    this.pool = new Pool({
-      connectionString: config.databaseUrl,
-    });
+    this.dbHandler = initializeDbHandler(config.database.type, config.database.config);
 
     if (config.contractAddresses) {
       config.contractAddresses.forEach((address) => {
@@ -182,13 +180,13 @@ export class StarknetIndexer {
 
   private async withTransaction<T>(
     operation: string,
-    fn: (client: PoolClient) => Promise<T>,
+    fn: () => Promise<T>,
     context: Record<string, any> = {}
   ): Promise<T | undefined> {
-    if (!this.client) {
+    if (!this.dbHandler.isConnected()) {
       this.logger.warn('Persistent database client not initialized, attempting to connect...');
       try {
-        this.client = await this.pool.connect();
+        await this.dbHandler.connect();
         this.logger.info('Persistent database client connected successfully');
       } catch (err) {
         this.logger.error('Failed to connect persistent database client:', err);
@@ -197,12 +195,12 @@ export class StarknetIndexer {
     }
 
     try {
-      await this.client.query('BEGIN');
-      const result = await fn(this.client);
-      await this.client.query('COMMIT');
+      await this.dbHandler.beginTransaction();
+      const result = await fn();
+      await this.dbHandler.commitTransaction();
       return result;
     } catch (error) {
-      await this.client.query('ROLLBACK');
+      await this.dbHandler.rollbackTransaction();
       this.logger.error(`${operation} failed:`, { ...context, error });
       return undefined;
     }
@@ -210,54 +208,26 @@ export class StarknetIndexer {
 
   // Initialize the database schema
   public async initializeDatabase(): Promise<number | undefined> {
-    const client = this.client || (await this.pool.connect());
-    const shouldRelease = !this.client;
+    const shouldRelease = !this.dbHandler.isConnected();
+
+    if (shouldRelease) {
+      this.logger.warn('Persistent database client not initialized, attempting to connect...');
+      try {
+        await this.dbHandler.connect();
+        this.logger.info('Persistent database client connected successfully');
+      } catch (err) {
+        this.logger.error('Failed to connect persistent database client:', err);
+        return undefined;
+      }
+    }
 
     try {
       // in blocks table, composite primary key with both number and hash
-      await client.query(`
-        CREATE TABLE IF NOT EXISTS blocks (
-          number BIGINT PRIMARY KEY,
-          hash TEXT UNIQUE NOT NULL,
-          parent_hash TEXT NOT NULL,
-          timestamp BIGINT NOT NULL,
-          is_canonical BOOLEAN NOT NULL DEFAULT TRUE
-        );
-        
-        CREATE TABLE IF NOT EXISTS events (
-          id SERIAL PRIMARY KEY,
-          block_number BIGINT NOT NULL,
-          transaction_hash TEXT NOT NULL,
-          from_address TEXT NOT NULL,
-          event_index INTEGER NOT NULL,
-          keys TEXT[] NOT NULL,
-          data TEXT[] NOT NULL,
-          CONSTRAINT fk_block FOREIGN KEY (block_number) 
-            REFERENCES blocks(number) ON DELETE CASCADE
-        );
-        
-        CREATE TABLE IF NOT EXISTS indexer_state (
-          id INTEGER PRIMARY KEY DEFAULT 1,
-          last_block_number BIGINT,
-          last_block_hash TEXT,
-          cursor_key TEXT,
-          CONSTRAINT singleton CHECK (id = 1)
-        );
-        
-        CREATE INDEX IF NOT EXISTS idx_events_block ON events(block_number);
-        CREATE INDEX IF NOT EXISTS idx_events_from ON events(from_address);
-      `);
+      await this.dbHandler.initializeDb();
 
-      const result = await client.query(
-        `
-          SELECT last_block_number, last_block_hash 
-          FROM indexer_state 
-          WHERE id = 1 AND (cursor_key IS NULL OR cursor_key = $1)
-        `,
-        [this.config.cursorKey || null]
-      );
+      const result = await this.dbHandler.getIndexerState(this.config.cursorKey);
 
-      if (result.rows.length === 0) {
+      if (!result) {
         let startingBlock: number;
         if (this.config.startingBlockNumber === 'latest') {
           if (!this.provider) throw new Error('Provider not initialized');
@@ -267,25 +237,19 @@ export class StarknetIndexer {
         }
         this.cursor = { blockNumber: startingBlock, blockHash: '' };
 
-        await client.query(
-          `
-            INSERT INTO indexer_state (last_block_number, last_block_hash, cursor_key) 
-            VALUES ($1, $2, $3)
-          `,
-          [startingBlock, '', this.config.cursorKey || null]
-        );
+        await this.dbHandler.initializeIndexerState(startingBlock, this.config.cursorKey);
 
         return startingBlock;
       } else {
         this.cursor = {
-          blockNumber: result.rows[0].last_block_number,
-          blockHash: result.rows[0].last_block_hash,
+          blockNumber: result.last_block_number,
+          blockHash: result.last_block_hash,
         };
         return this.cursor.blockNumber;
       }
     } finally {
       if (shouldRelease) {
-        client.release();
+        await this.dbHandler.disconnect();
       }
     }
   }
@@ -366,7 +330,7 @@ export class StarknetIndexer {
 
     // Establish persistent database connection
     this.logger.info('[Database] Establishing connection...');
-    this.client = await this.pool.connect();
+    await this.dbHandler.connect();
     this.logger.info('[Database] Connection established');
 
     const currentBlock = this.provider ? await this.provider.getBlockNumber() : 0;
@@ -421,13 +385,13 @@ export class StarknetIndexer {
     try {
       await this.withTransaction(
         'Processing block',
-        async (client) => {
-          await this.insertBlock(blockData, client);
-          await this.updateCursor(blockData.block_number, blockData.block_hash, client);
+        async () => {
+          await this.insertBlock(blockData);
+          await this.updateCursor(blockData.block_number, blockData.block_hash);
           this.logger.info(`Successfully processed block #${blockData.block_number}`);
 
           if (this.provider) {
-            await this.processBlockEvents(blockData.block_number, blockData.block_number, client);
+            await this.processBlockEvents(blockData.block_number, blockData.block_number);
           }
 
           if (this.failedBlocks.length > 0 && this.failedBlocks.includes(blockData.block_number)) {
@@ -450,57 +414,33 @@ export class StarknetIndexer {
 
     await this.withTransaction(
       'Handling reorg',
-      async (client) => {
+      async () => {
         // find the forked block in DB
-        const forkedBlock = await client.query(
-          `
-          SELECT * FROM blocks
-          WHERE number = $1
-        `,
-          [forkBlockNumber]
-        );
+        const forkedBlock = await this.dbHandler.getBlockByNumber(forkBlockNumber);
 
-        if (forkedBlock.rows.length === 0) {
+        if (!forkedBlock) {
           return;
         }
 
         // find blockhash of the forked block
-        let deletionPointerBlockHash: string | null = forkedBlock.rows[0].hash;
-        let deletionPointerBlockNumber: number | null = forkedBlock.rows[0].number;
+        let deletionPointerBlockHash: string | null = forkedBlock.block_hash;
+        let deletionPointerBlockNumber: number | null = forkedBlock.block_number;
 
         // build queries to mark non-canonical and delete events
         while (!!deletionPointerBlockHash && !!deletionPointerBlockNumber) {
           // deletes the forked block from the blocks table
-          await client.query(
-            `
-            DELETE FROM blocks
-            WHERE hash = $1
-          `,
-            [deletionPointerBlockHash]
-          );
+          await this.dbHandler.deleteBlock(deletionPointerBlockHash);
 
           // delete all events associated with the non-canonical block
-          await client.query(
-            `
-            DELETE FROM events
-            WHERE block_number = $1
-          `,
-            [deletionPointerBlockNumber]
-          );
+          await this.dbHandler.deleteEventsByBlockNumber(deletionPointerBlockNumber);
 
           // find next block to delete (based on parent hash)
           // find child block of the deletion pointer block
-          const childBlock = await client.query(
-            `
-            SELECT * FROM blocks
-            WHERE parent_hash = $1
-          `,
-            [deletionPointerBlockHash]
-          );
+          const childBlock = await this.dbHandler.getBlockByParentHash(deletionPointerBlockHash);
 
-          if (childBlock.rows.length > 0) {
-            deletionPointerBlockHash = childBlock.rows[0].hash;
-            deletionPointerBlockNumber = childBlock.rows[0].number;
+          if (childBlock) {
+            deletionPointerBlockHash = childBlock.block_hash;
+            deletionPointerBlockNumber = childBlock.block_number;
           } else {
             deletionPointerBlockHash = null;
             deletionPointerBlockNumber = null;
@@ -508,15 +448,15 @@ export class StarknetIndexer {
         }
 
         if (this.cursor && this.cursor.blockNumber >= forkBlockNumber) {
-          await this.updateCursor(forkBlockNumber - 1, '', client);
+          await this.updateCursor(forkBlockNumber - 1, '');
         }
 
         if (this.reorgHandler) {
           const forkedBlockDataForHandler = {
-            block_number: forkedBlock.rows[0].number,
-            block_hash: forkedBlock.rows[0].hash,
-            parent_hash: forkedBlock.rows[0].parent_hash,
-            timestamp: forkedBlock.rows[0].timestamp,
+            block_number: forkedBlock.block_number,
+            block_hash: forkedBlock.block_hash,
+            parent_hash: forkedBlock.parent_hash,
+            timestamp: forkedBlock.timestamp,
           };
           await this.reorgHandler(forkedBlockDataForHandler);
         }
@@ -541,17 +481,10 @@ export class StarknetIndexer {
     }
 
     // Close persistent database connection
-    if (this.client) {
+    if (this.dbHandler.isConnected()) {
       this.logger.info('[Database] Closing connection...');
-      this.client.release();
-      this.client = undefined;
+      await this.dbHandler.disconnect();
       this.logger.info('[Database] Connection closed');
-    }
-
-    try {
-      await this.pool.end();
-    } catch (error) {
-      this.logger.error('Error closing database pool:', error);
     }
 
     this.logger.info('Indexer stopped');
@@ -582,20 +515,9 @@ export class StarknetIndexer {
     }
   }
 
-  private async updateCursor(
-    blockNumber: number,
-    blockHash: string,
-    client: PoolClient
-  ): Promise<void> {
+  private async updateCursor(blockNumber: number, blockHash: string): Promise<void> {
     this.cursor = { blockNumber, blockHash };
-    await client.query(
-      `
-      UPDATE indexer_state 
-      SET last_block_number = $1, last_block_hash = $2
-      WHERE id = 1 AND (cursor_key IS NULL OR cursor_key = $3)
-    `,
-      [blockNumber, blockHash, this.config.cursorKey || null]
-    );
+    await this.dbHandler.updateCursor(blockNumber, blockHash, this.config.cursorKey);
   }
 
   private async withErrorHandling<T>(
@@ -678,30 +600,12 @@ export class StarknetIndexer {
       // Process all blocks and their events in a single transaction
       await this.withTransaction(
         `Processing blocks ${blockNumber} to ${chunkEndBlock} and their events`,
-        async (client) => {
+        async () => {
           const insertStart = Date.now();
 
           // Batch insert all blocks
           if (blocks.length > 0) {
-            const values = blocks
-              .map((block) => {
-                const timestamp =
-                  typeof block.timestamp === 'number'
-                    ? block.timestamp * 1000
-                    : new Date(block.timestamp).getTime();
-                return `(${block.block_number}, '${block.block_hash}', '${block.parent_hash}', ${timestamp})`;
-              })
-              .join(',');
-
-            await client.query(`
-              INSERT INTO blocks (number, hash, parent_hash, timestamp)
-              VALUES ${values}
-              ON CONFLICT (number) DO UPDATE
-              SET hash = EXCLUDED.hash, 
-                  parent_hash = EXCLUDED.parent_hash, 
-                  timestamp = EXCLUDED.timestamp, 
-                  is_canonical = TRUE
-            `);
+            await this.dbHandler.batchInsertBlocks(blocks);
 
             this.logger.info(
               `[${TAG}] Inserted ${blocks.length} blocks in ${Date.now() - insertStart}ms`
@@ -711,10 +615,10 @@ export class StarknetIndexer {
             if (blocks.length < chunkSize) {
               const blockRanges = groupConsecutiveBlocks(blocks.map((block) => block.block_number));
               for (const range of blockRanges) {
-                await this.processBlockEvents(range.from, range.to, client);
+                await this.processBlockEvents(range.from, range.to);
               }
             } else {
-              await this.processBlockEvents(blockNumber, chunkEndBlock, client);
+              await this.processBlockEvents(blockNumber, chunkEndBlock);
             }
             this.logger.info(`[${TAG}] Events processed in ${Date.now() - eventsStart}ms`);
           } else {
@@ -727,7 +631,7 @@ export class StarknetIndexer {
     }
   }
 
-  private async processBlockEvents(fromBlock: number, toBlock: number, client: PoolClient) {
+  private async processBlockEvents(fromBlock: number, toBlock: number) {
     if (!this.provider) {
       this.logger.error('No RPC provider available to fetch ABI');
       return;
@@ -827,7 +731,7 @@ export class StarknetIndexer {
 
           for (const { handler } of handlerConfigs) {
             try {
-              await handler(parsedEvent, client, this);
+              await handler(parsedEvent, this.dbHandler, this);
             } catch (error) {
               this.logger.error(
                 `Error processing event handler for contract ${fromAddress}:`,
@@ -844,31 +748,13 @@ export class StarknetIndexer {
     }
   }
 
-  private async insertBlock(
-    blockData: {
-      block_number: number;
-      block_hash: string;
-      parent_hash: string;
-      timestamp: number;
-    },
-    client: PoolClient
-  ) {
-    let timestamp;
-    if (typeof blockData.timestamp === 'number') {
-      timestamp = blockData.timestamp * 1000;
-    } else {
-      timestamp = new Date(blockData.timestamp).getTime();
-    }
-
-    await client.query(
-      `
-        INSERT INTO blocks (number, hash, parent_hash, timestamp)
-        VALUES ($1, $2, $3, $4)
-        ON CONFLICT (number) DO UPDATE
-        SET hash = $2, parent_hash = $3, timestamp = $4, is_canonical = TRUE
-      `,
-      [blockData.block_number, blockData.block_hash, blockData.parent_hash, timestamp]
-    );
+  private async insertBlock(blockData: {
+    block_number: number;
+    block_hash: string;
+    parent_hash: string;
+    timestamp: number;
+  }) {
+    await this.dbHandler.insertBlock(blockData);
   }
 
   private async withExponentialBackoff<T>(
@@ -904,11 +790,7 @@ export class StarknetIndexer {
   }
 
   private async checkIsBlockProcessed(blockNumber: number): Promise<boolean> {
-    const result = await this.pool.query(
-      `SELECT EXISTS (SELECT 1 FROM blocks WHERE number = $1) AS "exists"`,
-      [blockNumber]
-    );
-    return result.rows[0].exists;
+    return await this.dbHandler.checkIsBlockProcessed(blockNumber);
   }
 
   private addFailedBlock(blockData: QueuedBlock, _error: any): void {

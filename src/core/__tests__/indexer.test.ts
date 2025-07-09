@@ -11,7 +11,10 @@ describe('StarknetIndexer', () => {
     const indexer = new StarknetIndexer({
       rpcNodeUrl: 'http://localhost:9944',
       wsNodeUrl: 'ws://localhost:9945',
-      databaseUrl: 'postgresql://user:password@localhost:5432/testdb',
+      database: {
+        type: 'sqlite',
+        config: { dbPath: ':memory:' },
+      },
       startingBlockNumber: 0,
     });
     expect(indexer).toBeInstanceOf(StarknetIndexer);
@@ -21,7 +24,10 @@ describe('StarknetIndexer', () => {
     const indexer = new StarknetIndexer({
       rpcNodeUrl: 'http://localhost:9944',
       wsNodeUrl: 'ws://localhost:9945',
-      databaseUrl: 'postgresql://user:password@localhost:5432/testdb',
+      database: {
+        type: 'sqlite',
+        config: { dbPath: ':memory:' },
+      },
       startingBlockNumber: 0,
     });
     await expect(
@@ -38,7 +44,10 @@ describe('StarknetIndexer', () => {
     const indexer = new StarknetIndexer({
       rpcNodeUrl: 'http://localhost:9944',
       wsNodeUrl: 'ws://localhost:9945',
-      databaseUrl: 'postgresql://user:password@localhost:5432/testdb',
+      database: {
+        type: 'sqlite',
+        config: { dbPath: ':memory:' },
+      },
       startingBlockNumber: 0,
     });
     await expect(indexer.stop()).resolves.not.toThrow();
@@ -46,24 +55,29 @@ describe('StarknetIndexer', () => {
 
   describe('reorg cases', () => {
     let mockIndexer: StarknetIndexer;
-    let mockPoolClient: any;
-    let mockPool: any;
+    let mockDbHandler: any;
     let mockProvider: any;
     const contractAddress = '0x4718F5A0FC34CC1AF16A1CDEE98FFB20C31F5CD61D6AB07201858F4287C938D';
-    const testDatabaseUrl = 'postgresql://postgres:postgres@localhost:5432/test_starknet_indexer';
 
     beforeEach(() => {
-      // Mock database client
-      mockPoolClient = {
-        query: jest.fn().mockResolvedValue({ rows: [] }),
-        release: jest.fn(),
-      };
-
-      // Mock database pool
-      mockPool = {
-        connect: jest.fn().mockResolvedValue(mockPoolClient),
-        query: jest.fn().mockResolvedValue({ rows: [] }),
-        end: jest.fn(),
+      // Mock database handler
+      mockDbHandler = {
+        isConnected: jest.fn().mockReturnValue(true),
+        connect: jest.fn().mockResolvedValue(undefined),
+        disconnect: jest.fn().mockResolvedValue(undefined),
+        beginTransaction: jest.fn().mockResolvedValue(undefined),
+        commitTransaction: jest.fn().mockResolvedValue(undefined),
+        rollbackTransaction: jest.fn().mockResolvedValue(undefined),
+        initializeDb: jest.fn().mockResolvedValue(undefined),
+        getIndexerState: jest.fn().mockResolvedValue(null),
+        initializeIndexerState: jest.fn().mockResolvedValue(undefined),
+        getBlockByNumber: jest.fn().mockResolvedValue(null),
+        deleteBlock: jest.fn().mockResolvedValue(undefined),
+        deleteEventsByBlockNumber: jest.fn().mockResolvedValue(undefined),
+        getBlockByParentHash: jest.fn().mockResolvedValue(null),
+        updateCursor: jest.fn().mockResolvedValue(undefined),
+        batchInsertBlocks: jest.fn().mockResolvedValue(undefined),
+        insertBlock: jest.fn().mockResolvedValue(undefined),
       };
 
       // Mock RPC provider
@@ -78,13 +92,16 @@ describe('StarknetIndexer', () => {
       mockIndexer = new StarknetIndexer({
         rpcNodeUrl: 'http://127.0.0.1:5050',
         wsNodeUrl: 'ws://127.0.0.1:5050/ws',
-        databaseUrl: testDatabaseUrl,
+        database: {
+          type: 'sqlite',
+          config: { dbPath: ':memory:' },
+        },
         startingBlockNumber: 1,
         contractAddresses: [contractAddress],
       });
 
       // Replace internal dependencies with mocks
-      (mockIndexer as any).pool = mockPool;
+      (mockIndexer as any).dbHandler = mockDbHandler;
       (mockIndexer as any).provider = mockProvider;
 
       // Mock the withExponentialBackoff method to avoid delays
@@ -148,147 +165,95 @@ describe('StarknetIndexer', () => {
           blockHash: '0xcurrent52',
         };
 
-        let _callCount = 0;
-        mockPoolClient.query.mockImplementation((query: string, params?: any[]) => {
-          _callCount++;
-
-          if (query === 'BEGIN' || query === 'COMMIT' || query === 'ROLLBACK') {
-            return Promise.resolve({ rows: [] });
-          }
-
-          // Initial forked block query
-          if (query.includes('SELECT * FROM blocks') && query.includes('WHERE number = $1')) {
-            return Promise.resolve({
-              rows: [
-                {
-                  number: forkBlockNumber,
-                  hash: forkedBlockHash,
-                  parent_hash: parentBlockHash,
-                },
-              ],
-            });
-          }
-
-          // DELETE blocks query
-          if (query.includes('DELETE FROM blocks') && query.includes('WHERE hash = $1')) {
-            return Promise.resolve({ rows: [] });
-          }
-
-          // DELETE events query
-          if (query.includes('DELETE FROM events') && query.includes('WHERE block_number = $1')) {
-            return Promise.resolve({ rows: [] });
-          }
-
-          // Child block query
-          if (query.includes('WHERE parent_hash = $1')) {
-            const parentHash = params?.[0];
-            if (parentHash === forkedBlockHash) {
-              return Promise.resolve({
-                rows: [
-                  {
-                    number: forkBlockNumber + 1,
-                    hash: childBlockHash,
-                    parent_hash: forkedBlockHash,
-                  },
-                ],
-              });
-            } else {
-              return Promise.resolve({ rows: [] });
-            }
-          }
-
-          // Cursor update query
-          if (query.includes('UPDATE indexer_state')) {
-            return Promise.resolve({ rows: [] });
-          }
-
-          return Promise.resolve({ rows: [] });
+        // Setup dbHandler mocks for the reorg scenario
+        mockDbHandler.getBlockByNumber.mockResolvedValueOnce({
+          block_number: forkBlockNumber,
+          block_hash: forkedBlockHash,
+          parent_hash: parentBlockHash,
+          timestamp: Date.now(),
         });
+
+        // Mock child block lookup - first call returns child, second returns null
+        mockDbHandler.getBlockByParentHash
+          .mockResolvedValueOnce({
+            block_number: forkBlockNumber + 1,
+            block_hash: childBlockHash,
+            parent_hash: forkedBlockHash,
+            timestamp: Date.now(),
+          })
+          .mockResolvedValueOnce(null);
 
         await mockIndexer.handleReorg(forkBlockNumber);
 
         // Verify that blocks were deleted
-        expect(mockPoolClient.query).toHaveBeenCalledWith(
-          expect.stringContaining('DELETE FROM blocks'),
-          [forkedBlockHash]
-        );
+        expect(mockDbHandler.deleteBlock).toHaveBeenCalledWith(forkedBlockHash);
+        expect(mockDbHandler.deleteBlock).toHaveBeenCalledWith(childBlockHash);
 
         // Verify that events were deleted
-        expect(mockPoolClient.query).toHaveBeenCalledWith(
-          expect.stringContaining('DELETE FROM events'),
-          [forkBlockNumber]
-        );
+        expect(mockDbHandler.deleteEventsByBlockNumber).toHaveBeenCalledWith(forkBlockNumber);
+        expect(mockDbHandler.deleteEventsByBlockNumber).toHaveBeenCalledWith(forkBlockNumber + 1);
 
         // Verify cursor was updated
-        expect(mockPoolClient.query).toHaveBeenCalledWith(
-          expect.stringContaining('UPDATE indexer_state'),
-          expect.arrayContaining([forkBlockNumber - 1])
-        );
+        expect(mockDbHandler.updateCursor).toHaveBeenCalledWith(forkBlockNumber - 1, '', undefined);
       });
 
       it('should handle reorg when no forked block exists in database', async () => {
         const forkBlockNumber = 999;
 
         // Mock no forked block found
-        mockPoolClient.query.mockResolvedValueOnce({ rows: [] });
+        mockDbHandler.getBlockByNumber.mockResolvedValueOnce(null);
 
         await mockIndexer.handleReorg(forkBlockNumber);
 
         // Should only have been called once for the initial block query
-        expect(mockPoolClient.query).toHaveBeenCalledTimes(3); // BEGIN, SELECT, COMMIT
+        expect(mockDbHandler.getBlockByNumber).toHaveBeenCalledWith(forkBlockNumber);
+        expect(mockDbHandler.deleteBlock).not.toHaveBeenCalled();
+        expect(mockDbHandler.deleteEventsByBlockNumber).not.toHaveBeenCalled();
       });
 
       it('should handle deep reorg with multiple blocks', async () => {
         const forkBlockNumber = 45;
         const blocks = [
-          { number: 45, hash: '0xblock45', parent_hash: '0xblock44' },
-          { number: 46, hash: '0xblock46', parent_hash: '0xblock45' },
-          { number: 47, hash: '0xblock47', parent_hash: '0xblock46' },
+          {
+            block_number: 45,
+            block_hash: '0xblock45',
+            parent_hash: '0xblock44',
+            timestamp: Date.now(),
+          },
+          {
+            block_number: 46,
+            block_hash: '0xblock46',
+            parent_hash: '0xblock45',
+            timestamp: Date.now(),
+          },
+          {
+            block_number: 47,
+            block_hash: '0xblock47',
+            parent_hash: '0xblock46',
+            timestamp: Date.now(),
+          },
         ];
 
-        let queryCallCount = 0;
-        mockPoolClient.query.mockImplementation((query: string, params?: any[]) => {
-          queryCallCount++;
+        // Setup initial block
+        mockDbHandler.getBlockByNumber.mockResolvedValueOnce(blocks[0]);
 
-          if (query === 'BEGIN' || query === 'COMMIT') {
-            return Promise.resolve({ rows: [] });
-          }
-
-          // Initial forked block query
-          if (queryCallCount === 2) {
-            return Promise.resolve({ rows: [blocks[0]] });
-          }
-
-          // Child block queries
-          if (query.includes('WHERE parent_hash = $1')) {
-            const parentHash = params?.[0];
-            if (parentHash === '0xblock45') {
-              return Promise.resolve({ rows: [blocks[1]] });
-            } else if (parentHash === '0xblock46') {
-              return Promise.resolve({ rows: [blocks[2]] });
-            } else {
-              return Promise.resolve({ rows: [] });
-            }
-          }
-
-          return Promise.resolve({ rows: [] });
-        });
+        // Setup child block lookups in sequence
+        mockDbHandler.getBlockByParentHash
+          .mockResolvedValueOnce(blocks[1]) // 0xblock45 -> 0xblock46
+          .mockResolvedValueOnce(blocks[2]) // 0xblock46 -> 0xblock47
+          .mockResolvedValueOnce(null); // 0xblock47 -> null (end)
 
         await mockIndexer.handleReorg(forkBlockNumber);
 
         // Should have processed all 3 blocks (deleted them)
-        expect(mockPoolClient.query).toHaveBeenCalledWith(
-          expect.stringContaining('DELETE FROM blocks'),
-          ['0xblock45']
-        );
-        expect(mockPoolClient.query).toHaveBeenCalledWith(
-          expect.stringContaining('DELETE FROM blocks'),
-          ['0xblock46']
-        );
-        expect(mockPoolClient.query).toHaveBeenCalledWith(
-          expect.stringContaining('DELETE FROM blocks'),
-          ['0xblock47']
-        );
+        expect(mockDbHandler.deleteBlock).toHaveBeenCalledWith('0xblock45');
+        expect(mockDbHandler.deleteBlock).toHaveBeenCalledWith('0xblock46');
+        expect(mockDbHandler.deleteBlock).toHaveBeenCalledWith('0xblock47');
+
+        // Should have deleted events for all blocks
+        expect(mockDbHandler.deleteEventsByBlockNumber).toHaveBeenCalledWith(45);
+        expect(mockDbHandler.deleteEventsByBlockNumber).toHaveBeenCalledWith(46);
+        expect(mockDbHandler.deleteEventsByBlockNumber).toHaveBeenCalledWith(47);
       });
     });
 
@@ -326,8 +291,7 @@ describe('StarknetIndexer', () => {
         });
 
         // Simulate processing blocks (this should not find events and skip processing)
-        const mockClient = await mockPool.connect();
-        await (mockIndexer as any).processBlockEvents(48, 49, mockClient);
+        await (mockIndexer as any).processBlockEvents(48, 49);
 
         // Simulate reorg at block 48
         const reorgBlock = 48;
@@ -338,35 +302,20 @@ describe('StarknetIndexer', () => {
           blockHash: '0xcurrent50',
         };
 
-        mockPoolClient.query.mockImplementation((query: string, _params?: any[]) => {
-          if (query === 'BEGIN' || query === 'COMMIT' || query === 'ROLLBACK') {
-            return Promise.resolve({ rows: [] });
-          }
-
-          // Initial forked block query
-          if (query.includes('SELECT * FROM blocks') && query.includes('WHERE number = $1')) {
-            return Promise.resolve({
-              rows: [
-                {
-                  number: reorgBlock,
-                  hash: '0xoriginal48',
-                  parent_hash: '0xoriginal47',
-                },
-              ],
-            });
-          }
-
-          // DELETE blocks and events queries
-          return Promise.resolve({ rows: [] });
+        // Setup reorg scenario
+        mockDbHandler.getBlockByNumber.mockResolvedValueOnce({
+          block_number: reorgBlock,
+          block_hash: '0xoriginal48',
+          parent_hash: '0xoriginal47',
+          timestamp: Date.now(),
         });
+
+        mockDbHandler.getBlockByParentHash.mockResolvedValueOnce(null);
 
         await mockIndexer.handleReorg(reorgBlock);
 
         // Verify events were deleted during reorg
-        expect(mockPoolClient.query).toHaveBeenCalledWith(
-          expect.stringContaining('DELETE FROM events'),
-          [reorgBlock]
-        );
+        expect(mockDbHandler.deleteEventsByBlockNumber).toHaveBeenCalledWith(reorgBlock);
       }, 10000);
 
       it('should process new events after reorg on canonical chain', async () => {
@@ -406,8 +355,7 @@ describe('StarknetIndexer', () => {
           continuation_token: undefined,
         });
 
-        const mockClient = await mockPool.connect();
-        await (mockIndexer as any).processBlockEvents(48, 48, mockClient);
+        await (mockIndexer as any).processBlockEvents(48, 48);
 
         expect(eventsReceived).toHaveLength(1);
         expect(eventsReceived[0].block_hash).toBe('0xcanonical48');
@@ -427,53 +375,22 @@ describe('StarknetIndexer', () => {
         };
 
         // Mock reorg handling
-        mockPoolClient.query.mockImplementation((query: string, _params?: any[]) => {
-          if (query === 'BEGIN' || query === 'COMMIT' || query === 'ROLLBACK') {
-            return Promise.resolve({ rows: [] });
-          }
-
-          // Initial forked block query
-          if (query.includes('SELECT * FROM blocks') && query.includes('WHERE number = $1')) {
-            return Promise.resolve({
-              rows: [
-                {
-                  number: reorgBlockNumber,
-                  hash: '0xreorg48',
-                  parent_hash: '0xparent47',
-                },
-              ],
-            });
-          }
-
-          // DELETE blocks query
-          if (query.includes('DELETE FROM blocks') && query.includes('WHERE hash = $1')) {
-            return Promise.resolve({ rows: [] });
-          }
-
-          // DELETE events query
-          if (query.includes('DELETE FROM events') && query.includes('WHERE block_number = $1')) {
-            return Promise.resolve({ rows: [] });
-          }
-
-          // Child block query (no children)
-          if (query.includes('WHERE parent_hash = $1')) {
-            return Promise.resolve({ rows: [] });
-          }
-
-          // Cursor update query
-          if (query.includes('UPDATE indexer_state')) {
-            return Promise.resolve({ rows: [] });
-          }
-
-          return Promise.resolve({ rows: [] });
+        mockDbHandler.getBlockByNumber.mockResolvedValueOnce({
+          block_number: reorgBlockNumber,
+          block_hash: '0xreorg48',
+          parent_hash: '0xparent47',
+          timestamp: Date.now(),
         });
+
+        mockDbHandler.getBlockByParentHash.mockResolvedValueOnce(null);
 
         await mockIndexer.handleReorg(reorgBlockNumber);
 
         // Verify cursor was updated to before the reorg point
-        expect(mockPoolClient.query).toHaveBeenCalledWith(
-          expect.stringContaining('UPDATE indexer_state'),
-          expect.arrayContaining([reorgBlockNumber - 1])
+        expect(mockDbHandler.updateCursor).toHaveBeenCalledWith(
+          reorgBlockNumber - 1,
+          '',
+          undefined
         );
       });
 
@@ -488,15 +405,12 @@ describe('StarknetIndexer', () => {
         };
 
         // Mock reorg handling with no blocks found
-        mockPoolClient.query.mockResolvedValue({ rows: [] });
+        mockDbHandler.getBlockByNumber.mockResolvedValueOnce(null);
 
         await mockIndexer.handleReorg(reorgBlockNumber);
 
-        // Cursor should not be updated since reorg is before current position
-        expect(mockPoolClient.query).not.toHaveBeenCalledWith(
-          expect.stringContaining('UPDATE indexer_state'),
-          expect.arrayContaining([expect.any(Number)])
-        );
+        // Cursor should not be updated since no forked block was found
+        expect(mockDbHandler.updateCursor).not.toHaveBeenCalled();
       });
     });
 
@@ -505,12 +419,13 @@ describe('StarknetIndexer', () => {
         const forkBlockNumber = 50;
 
         // Mock database error during reorg
-        mockPoolClient.query
-          .mockResolvedValueOnce({ rows: [{ number: 50, hash: '0xfork50' }] })
-          .mockRejectedValueOnce(new Error('Database error'));
-
-        // Mock rollback
-        const rollbackSpy = jest.spyOn(mockPoolClient, 'query');
+        mockDbHandler.getBlockByNumber.mockResolvedValueOnce({
+          block_number: 50,
+          block_hash: '0xfork50',
+          parent_hash: '0xparent49',
+          timestamp: Date.now(),
+        });
+        mockDbHandler.deleteBlock.mockRejectedValueOnce(new Error('Database error'));
 
         try {
           await mockIndexer.handleReorg(forkBlockNumber);
@@ -519,21 +434,25 @@ describe('StarknetIndexer', () => {
         }
 
         // Verify rollback was called
-        expect(rollbackSpy).toHaveBeenCalledWith('ROLLBACK');
+        expect(mockDbHandler.rollbackTransaction).toHaveBeenCalled();
       });
 
       it('should commit transaction when reorg handling succeeds', async () => {
         const forkBlockNumber = 50;
 
         // Mock successful reorg
-        mockPoolClient.query
-          .mockResolvedValueOnce({ rows: [{ number: 50, hash: '0xfork50' }] })
-          .mockResolvedValue({ rows: [] });
+        mockDbHandler.getBlockByNumber.mockResolvedValueOnce({
+          block_number: 50,
+          block_hash: '0xfork50',
+          parent_hash: '0xparent49',
+          timestamp: Date.now(),
+        });
+        mockDbHandler.getBlockByParentHash.mockResolvedValueOnce(null);
 
         await mockIndexer.handleReorg(forkBlockNumber);
 
         // Verify commit was called
-        expect(mockPoolClient.query).toHaveBeenCalledWith('COMMIT');
+        expect(mockDbHandler.commitTransaction).toHaveBeenCalled();
       });
     });
   });

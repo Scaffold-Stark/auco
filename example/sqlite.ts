@@ -8,9 +8,9 @@ const indexer = new StarknetIndexer({
 
   // Change your database connection string here if needed
   database: {
-    type: 'postgres',
+    type: 'sqlite',
     config: {
-      connectionString: 'postgresql://postgres:postgres@localhost:5432/starknet_indexer',
+      dbPath: 'starknet_indexer.db',
     },
   },
 

@@ -1,7 +1,8 @@
 import { Abi } from 'abi-wan-kanabi';
 import { ExtractAbiEventNames, EventToPrimitiveType } from 'abi-wan-kanabi/kanabi';
-import { PoolClient } from 'pg';
 import { StarknetIndexer } from '..';
+import { BaseDbHandler } from '../utils/db/base-db-handler';
+import { MysqlDbHandlerConfig, PostgresDbHandlerConfig, SqliteDbHandlerConfig } from './db-handler';
 
 export enum LogLevel {
   DEBUG = 'debug',
@@ -50,10 +51,25 @@ export class ConsoleLogger implements Logger {
   }
 }
 
+// Type-safe database configuration using discriminated unions
+type DatabaseConfig =
+  | {
+      type: 'postgres';
+      config: PostgresDbHandlerConfig;
+    }
+  | {
+      type: 'mysql';
+      config: MysqlDbHandlerConfig;
+    }
+  | {
+      type: 'sqlite';
+      config: SqliteDbHandlerConfig;
+    };
+
 export interface IndexerConfig {
   rpcNodeUrl: string;
   wsNodeUrl: string;
-  databaseUrl: string;
+  database: DatabaseConfig;
   startingBlockNumber: number | 'latest';
   contractAddresses?: string[];
   cursorKey?: string;
@@ -81,7 +97,7 @@ export interface QueuedBlock {
 
 export type EventHandler<TAbi extends Abi, TEventName extends ExtractAbiEventNames<TAbi>> = (
   event: StarknetEvent<TAbi, TEventName>,
-  client: PoolClient,
+  dbHandler: BaseDbHandler,
   indexer: StarknetIndexer
 ) => Promise<void>;
 

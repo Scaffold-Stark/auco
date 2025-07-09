@@ -5,7 +5,7 @@
 
 # Auco
 
-A TypeScript/Node.js indexer for Starknet events, supporting PostgreSQL and real-time event handling via WebSocket and RPC.
+A TypeScript/Node.js indexer for Starknet events, supporting PostgreSQL, SQLite, and real-time event handling via WebSocket and RPC.
 
 ## Features
 
@@ -16,6 +16,7 @@ A TypeScript/Node.js indexer for Starknet events, supporting PostgreSQL and real
 - 🛡️ **Type Safety**: Full TypeScript support with type-safe event handling
 - 🔄 **Retry Logic**: Automatic retry mechanisms with exponential backoff
 - 📊 **Historical Processing**: Process historical blocks with seamless real-time transition
+- 🔌 **Multiple DB Support**: Supports PostgreSQL, SQLite, and MySQL out of the box.
 
 ## Installation
 
@@ -37,14 +38,16 @@ npm run build
 ## Requirements
 
 - **Node.js**: Version 18 or higher
-- **PostgreSQL**: Version 12 or higher
+- **PostgreSQL**: Version 12 or higher (can be switched with SQLite or MySQL)
 - **WebSocket endpoint**: Starknet node with WebSocket support (e.g., Infura, local node with WS enabled)
 - **Starknet node spec version 0.8 or above**: Compatible with Starknet nodes running spec version 0.8+
 - **How to install a Starknet node?** See the quick guide in [CONTRIBUTING.md](CONTRIBUTING.md#prerequisites).
 
 ## Quick Start
 
-See [`example/index.ts`](./example/index.ts) for a minimal working example.
+### PostgreSQL Example
+
+See [`example/index.ts`](./example/index.ts) for a PostgreSQL-based example.
 
 ```typescript
 import { StarknetIndexer, LogLevel } from 'auco';
@@ -53,8 +56,12 @@ import { abi as myContractAbi } from './myContractAbi'; // Provide your contract
 const indexer = new StarknetIndexer({
   rpcNodeUrl: 'https://starknet-mainnet.infura.io/v3/YOUR_KEY',
   wsNodeUrl: 'wss://starknet-mainnet.infura.io/ws/v3/YOUR_KEY',
-  databaseUrl: 'postgresql://user:password@localhost:5432/mydb',
-  contractAddresses: ['0x...'],
+  database: {
+    type: 'postgres',
+    config: {
+      connectionString: 'postgresql://user:password@localhost:5432/mydb',
+    },
+  },
   logLevel: LogLevel.INFO,
 });
 
@@ -71,32 +78,67 @@ indexer.onEvent({
 indexer.start();
 ```
 
-## Running the Example
+### SQLite Example
 
-1. **Setup PostgreSQL database**:
-   ```bash
-   createdb starknet_indexer
+1. **Configure your environment**:
+   - Edit `example/sqlite.ts` with your node URLs and contract address
+   - Update your database config to SQLite
+
+   ```typescript
+   const indexer = new StarknetIndexer({
+     rpcNodeUrl: 'https://starknet-sepolia-rpc.publicnode.com',
+     wsNodeUrl: 'wss://starknet-sepolia-rpc.publicnode.com',
+     database: {
+       type: 'sqlite',
+       config: {
+         dbPath: 'starknet_indexer.db',
+       },
+     },
+     logLevel: LogLevel.INFO,
+     startingBlockNumber: 'latest',
+   });
    ```
 
-2. **Configure your environment**:
-   - Edit `example/index.ts` with your node URLs and contract address
-   - Update the PostgreSQL connection string
-
-3. **Run the example**:
+2. **Run the example**:
    ```bash
-   npx ts-node example/index.ts
+   npx ts-node example/sqlite.ts
+   ```
+
+### MySQL Example
+
+1. **Configure your environment**:
+   - Edit `example/mysql.ts` with your node URLs and contract address
+   - Update your database config to MySQL
+
+   ```typescript
+   const indexer = new StarknetIndexer({
+     rpcNodeUrl: 'https://starknet-sepolia-rpc.publicnode.com',
+     wsNodeUrl: 'wss://starknet-sepolia-rpc.publicnode.com',
+     database: {
+       type: 'mysql',
+       config: {
+         connectionString: 'mysql://root:root@localhost:3306/starknet_indexer',
+       },
+     },
+     logLevel: LogLevel.INFO,
+     startingBlockNumber: 'latest',
+   });
+   ```
+
+2. **Run the example**:
+   ```bash
+   npx ts-node example/mysql.ts
    ```
 
 ## Configuration
 
-| Option | Type | Required | Description |
-|--------|------|----------|-------------|
-| `rpcNodeUrl` | `string` | ✅ | Starknet RPC endpoint |
-| `wsNodeUrl` | `string` | ✅ | Starknet WebSocket endpoint |
-| `databaseUrl` | `string` | ✅ | PostgreSQL connection string |
-| `contractAddresses` | `string[]` | ❌ | Array of contract addresses to index |
-| `logLevel` | `LogLevel` | ❌ | Log verbosity (DEBUG, INFO, WARN, ERROR) |
-| `startingBlockNumber` | `number \| 'latest'` | ❌ | Starting block number for indexing |
+| Option                | Type                 | Required | Description                                                   |
+| --------------------- | -------------------- | -------- | ------------------------------------------------------------- |
+| `rpcNodeUrl`          | `string`             | ✅       | Starknet RPC endpoint                                         |
+| `wsNodeUrl`           | `string`             | ✅       | Starknet WebSocket endpoint                                   |
+| `database`            | `object`             | ✅       | Database configuration object with type and config properties |
+| `logLevel`            | `LogLevel`           | ❌       | Log verbosity (DEBUG, INFO, WARN, ERROR)                      |
+| `startingBlockNumber` | `number \| 'latest'` | ❌       | Starting block number for indexing                            |
 
 ## Handling Chain Reorgs
 
@@ -139,7 +181,8 @@ npm run build         # Compile TypeScript
 ## Roadmap
 
 ### 📋 Planned
-- [ ] Additional database (MongoDB, MySQL, etc.)
+
+- [x] Additional database (MongoDB, MySQL, etc.) ✅
 - [ ] Built-in monitoring and health checks
 - [ ] Advanced caching layer
 - [ ] Docker containerization
@@ -154,20 +197,23 @@ We welcome contributions! Please see our [Contributing Guide](CONTRIBUTING.md) f
 
 1. **Fork and clone** the repository
 2. **Install dependencies**:
+
    ```bash
    npm install
    ```
 
 3. **Setup development environment**:
+
    ```bash
    # Start local PostgreSQL (if using Docker)
    docker run --name postgres-dev -e POSTGRES_PASSWORD=postgres -p 5432:5432 -d postgres:13
-   
+
    # Start local Starknet devnet
    npm run chain
    ```
 
 4. **Run tests**:
+
    ```bash
    npm test
    ```
@@ -185,12 +231,12 @@ We welcome contributions! Please see our [Contributing Guide](CONTRIBUTING.md) f
 
 ### Common Issues
 
-| Issue | Solution |
-|-------|----------|
-| PostgreSQL connection failed | Ensure PostgreSQL is running and accessible |
-| WebSocket connection failed | Verify your node supports WebSocket connections |
-| ABI parsing errors | Check your ABI file and event names |
-| Memory usage high | Consider processing events in smaller batches |
+| Issue                        | Solution                                        |
+| ---------------------------- | ----------------------------------------------- |
+| PostgreSQL connection failed | Ensure PostgreSQL is running and accessible     |
+| WebSocket connection failed  | Verify your node supports WebSocket connections |
+| ABI parsing errors           | Check your ABI file and event names             |
+| Memory usage high            | Consider processing events in smaller batches   |
 
 ### Getting Help
 
@@ -206,4 +252,4 @@ This project is licensed under the MIT License - see the [LICENSE](LICENSE) file
 
 - Built with [Starknet.js](https://github.com/0xs34n/starknet.js)
 - Type-safe ABI parsing with [abi-wan-kanabi](https://github.com/keep-starknet-strange/abi-wan-kanabi)
-- Database operations with [node-postgres](https://github.com/brianc/node-postgres)
+- Database operations with [node-postgres](https://github.com/brianc/node-postgres), [mysql2](https://github.com/sidorares/node-mysql2), and [better-sqlite3](https://github.com/WiseLibs/better-sqlite3)

@@ -28,7 +28,12 @@ const provider = new RpcProvider({ nodeUrl: CONFIG.RPC_URL });
 const indexer = new StarknetIndexer({
   rpcNodeUrl: CONFIG.RPC_URL,
   wsNodeUrl: CONFIG.WS_URL,
-  databaseUrl: CONFIG.DATABASE_URL,
+  database: {
+    type: 'postgres',
+    config: {
+      connectionString: CONFIG.DATABASE_URL,
+    },
+  },
   startingBlockNumber: CONFIG.STARTING_BLOCK,
   contractAddresses: [CONFIG.CONTRACT_ADDRESS],
 });
