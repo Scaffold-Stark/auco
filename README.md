@@ -85,13 +85,15 @@ indexer.start();
    - Update your database config to SQLite
 
    ```typescript
+   import Database from 'better-sqlite3';
+
    const indexer = new StarknetIndexer({
      rpcNodeUrl: 'https://starknet-sepolia-rpc.publicnode.com',
      wsNodeUrl: 'wss://starknet-sepolia-rpc.publicnode.com',
      database: {
        type: 'sqlite',
        config: {
-         dbPath: 'starknet_indexer.db',
+         dbInstance: new Database('starknet_indexer.db'),
        },
      },
      logLevel: LogLevel.INFO,

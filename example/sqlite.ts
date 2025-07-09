@@ -1,5 +1,6 @@
 import { StarknetIndexer, LogLevel } from '../src/index';
 import abi from './abi/ABI';
+import Database from 'better-sqlite3';
 
 const indexer = new StarknetIndexer({
   // Change your node urls here if needed
@@ -10,7 +11,7 @@ const indexer = new StarknetIndexer({
   database: {
     type: 'sqlite',
     config: {
-      dbPath: 'starknet_indexer.db',
+      dbInstance: new Database('starknet_indexer.db'),
     },
   },
 

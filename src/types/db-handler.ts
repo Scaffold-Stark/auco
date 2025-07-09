@@ -1,3 +1,5 @@
+import Database from "better-sqlite3";
+
 export interface BlockData {
   block_number: number;
   block_hash: string;
@@ -25,7 +27,7 @@ export interface PostgresDbHandlerConfig {
 }
 
 export interface SqliteDbHandlerConfig {
-  dbPath: string;
+  dbInstance: Database.Database;
 }
 
 export interface MysqlDbHandlerConfig {
