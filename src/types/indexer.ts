@@ -1,5 +1,5 @@
 import { Abi } from 'abi-wan-kanabi';
-import { ExtractAbiEventNames, EventToPrimitiveType } from 'abi-wan-kanabi/kanabi';
+import { EventToPrimitiveType } from './abi-wan-helpers';
 import { StarknetIndexer } from '..';
 import { BaseDbHandler } from '../utils/db/base-db-handler';
 import { MysqlDbHandlerConfig, PostgresDbHandlerConfig, SqliteDbHandlerConfig } from './db-handler';
@@ -77,7 +77,7 @@ export interface IndexerConfig {
   logger?: Logger;
 }
 
-export type StarknetEvent<TAbi extends Abi, TEventName extends ExtractAbiEventNames<TAbi>> = {
+export type StarknetEvent<TAbi extends Abi, TEventName extends string> = {
   block_number: number;
   block_hash: string;
   transaction_hash: string;
@@ -95,24 +95,28 @@ export interface QueuedBlock {
   timestamp: number;
 }
 
-export type EventHandler<TAbi extends Abi, TEventName extends ExtractAbiEventNames<TAbi>> = (
+export type EventHandler<TAbi extends Abi, TEventName extends string> = (
   event: StarknetEvent<TAbi, TEventName>,
   dbHandler: BaseDbHandler,
   indexer: StarknetIndexer
 ) => Promise<void>;
 
-export interface EventHandlerParams<
-  TAbi extends Abi,
-  TEventName extends ExtractAbiEventNames<TAbi>,
-> {
+export interface EventHandlerParams<TAbi extends Abi, TEventName extends string> {
   contractAddress: string;
   abi: TAbi;
   eventName: TEventName;
   handler: EventHandler<TAbi, TEventName>;
 }
 
-export interface EventHandlerConfig {
-  handler: EventHandler<any, any>;
+// Base interface for storage
+export interface BaseEventHandlerConfig {
+  handler: (event: any, dbHandler: BaseDbHandler, indexer: StarknetIndexer) => Promise<void>;
+}
+
+// Typed interface for public API
+export interface EventHandlerConfig<TAbi extends Abi, TEventName extends string>
+  extends BaseEventHandlerConfig {
+  handler: EventHandler<TAbi, TEventName>;
 }
 
 export type ReorgHandler = (forkedBlock: QueuedBlock) => Promise<void>;
