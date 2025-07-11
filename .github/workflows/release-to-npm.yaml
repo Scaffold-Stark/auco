@@ -102,6 +102,6 @@ jobs:
         uses: slackapi/slack-github-action@v1.26.0
         with:
           channel-id: ${{ secrets.SLACK_CHANNEL_ID }}
-          slack-message: '❌ Version bump or publish failed on main: ${{ github.ref_name }}'
+          slack-message: '❌ Version bump or publish failed on main (Auco): ${{ github.ref_name }}'
         env:
           SLACK_BOT_TOKEN: ${{ secrets.SLACK_BOT_TOKEN }}
