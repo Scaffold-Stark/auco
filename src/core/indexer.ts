@@ -9,7 +9,7 @@ import {
   WebSocketChannel,
 } from 'starknet';
 
-import { groupConsecutiveBlocks } from '../utils/blockUtils';
+import { groupConsecutiveBlocks, parallelMap } from '../utils/blockUtils';
 import {
   EventHandlerConfig,
   BaseEventHandlerConfig,
@@ -55,7 +55,7 @@ export class StarknetIndexer {
   private retryTimeout?: NodeJS.Timeout;
   private readonly RETRY_INTERVAL = 10000; // 10 seconds between retry checks
   private readonly reconnectDelay: number = 1000;
-
+  private readonly MAX_HISTORICAL_BLOCK_CONCURRENT_REQUESTS: number;
   private wsUrl: string;
 
   constructor(private config: IndexerConfig) {
@@ -81,6 +81,10 @@ export class StarknetIndexer {
       this.logger.error('Failed to initialize RPC provider:', error);
     }
 
+    // Set concurrency for historical block fetching (default: 5, configurable)
+    this.MAX_HISTORICAL_BLOCK_CONCURRENT_REQUESTS =
+      config.maxHistoricalBlockConcurrentRequests ?? 5;
+
     this.setupEventHandlers();
   }
 
@@ -97,7 +101,6 @@ export class StarknetIndexer {
           };
 
           if (this.isProcessingHistoricalBlocks) {
-            this.logger.info(`Queuing block #${blockData.block_number} for later processing`);
             this.blockQueue.push(blockData);
           } else {
             this.logger.info(`Processing new block #${blockData.block_number}`);
@@ -122,23 +125,23 @@ export class StarknetIndexer {
 
     this.wsChannel.onClose = async (event) => {
       if (this.started) {
-        this.logger.info('Connection closed, attempting to reconnect...');
-        this.logger.info('Reason: ', event.reason);
-        this.logger.info('Code: ', event.code);
+        this.logger.debug('Connection closed, attempting to reconnect...');
+        this.logger.debug('Reason: ', event.reason);
+        this.logger.debug('Code: ', event.code);
 
         await this.withExponentialBackoff('Reconnecting WebSocket', async () => {
           await new Promise((resolve) => setTimeout(resolve, this.reconnectDelay));
-          this.logger.info('Reconnecting WebSocket...');
+          this.logger.debug('Reconnecting WebSocket...');
           this.wsChannel = new WebSocketChannel({
             nodeUrl: this.wsUrl,
           });
-          this.logger.info('Reconnecting Websocket Successfully');
+          this.logger.debug('Reconnecting Websocket Successfully');
           this.setupEventHandlers();
-          this.logger.info('Setup Event Handlers Successfully');
+          this.logger.debug('Setup Event Handlers Successfully');
           await this.wsChannel.waitForConnection();
-          this.logger.info('Wait For Connection Successfully');
+          this.logger.debug('Wait For Connection Successfully');
           await this.wsChannel.subscribeNewHeads();
-          this.logger.info('Subscribe New Heads Successfully');
+          this.logger.debug('Subscribe New Heads Successfully');
         });
       }
     };
@@ -199,7 +202,7 @@ export class StarknetIndexer {
       this.logger.warn('Persistent database client not initialized, attempting to connect...');
       try {
         await this.dbHandler.connect();
-        this.logger.info('Persistent database client connected successfully');
+        this.logger.debug('Persistent database client connected successfully');
       } catch (err) {
         this.logger.error('Failed to connect persistent database client:', err);
         return undefined;
@@ -556,17 +559,32 @@ export class StarknetIndexer {
     let continuationToken;
     let allEvents: EmittedEvent[] = [];
 
-    do {
-      const response = await this.provider.getEvents({
-        from_block: { block_number: fromBlock },
-        to_block: { block_number: toBlock },
-        chunk_size: 1000,
-        continuation_token: continuationToken,
-      });
+    // Get all unique event selectors from registered handlers
+    const eventSelectors = new Set<string>();
+    for (const [handlerKey] of this.eventHandlers.entries()) {
+      if (handlerKey.includes(':')) {
+        const eventSelector = handlerKey.split(':')[1];
+        eventSelectors.add(eventSelector);
+      }
+    }
 
-      allEvents = [...allEvents, ...response.events];
-      continuationToken = response.continuation_token;
-    } while (continuationToken);
+    const keys = Array.from(eventSelectors).map((selector) => [selector]);
+
+    for (const contractAddress of this.contractAddresses) {
+      do {
+        const response = await this.provider.getEvents({
+          from_block: { block_number: fromBlock },
+          to_block: { block_number: toBlock },
+          address: contractAddress,
+          keys: keys.length > 0 ? keys : undefined,
+          chunk_size: 1000,
+          continuation_token: continuationToken,
+        });
+
+        allEvents = [...allEvents, ...response.events];
+        continuationToken = response.continuation_token;
+      } while (continuationToken);
+    }
 
     return allEvents;
   }
@@ -581,32 +599,48 @@ export class StarknetIndexer {
 
       this.logger.info(`[${TAG}] Starting processing of ${chunkLabel}`);
 
-      // Pre-fetch all blocks and events before starting transaction
-      const blocks: any[] = [];
+      // Parallelize block fetching with concurrency control
+      const blockNumbersToFetch: number[] = [];
+
       for (let currentBlock = blockNumber; currentBlock <= chunkEndBlock; currentBlock++) {
         if (await this.checkIsBlockProcessed(currentBlock)) {
           this.logger.debug(`[${TAG}] Skipping block #${currentBlock} - already processed`);
           continue;
         }
-
-        const blockFetchStart = Date.now();
-        const block = await this.provider?.getBlock(currentBlock);
-        const fetchDuration = Date.now() - blockFetchStart;
-
-        if (!block || !block.block_hash) {
-          this.logger.error(
-            `[${TAG}] No block found for #${currentBlock} (fetch took ${fetchDuration}ms)`
-          );
-          continue;
-        }
-
-        blocks.push({
-          block_number: block.block_number,
-          block_hash: block.block_hash,
-          parent_hash: block.parent_hash,
-          timestamp: block.timestamp,
-        });
+        blockNumbersToFetch.push(currentBlock);
       }
+
+      const blocks: any[] = [];
+      const time = Date.now();
+      const fetchedBlocks = await parallelMap(
+        blockNumbersToFetch,
+        async (currentBlock) => {
+          const blockFetchStart = Date.now();
+          const block = await this.provider?.getBlock(currentBlock);
+          const fetchDuration = Date.now() - blockFetchStart;
+
+          if (!block || !block.block_hash) {
+            this.logger.error(
+              `[${TAG}] No block found for #${currentBlock} (fetch took ${fetchDuration}ms)`
+            );
+            return undefined;
+          }
+
+          return {
+            block_number: block.block_number,
+            block_hash: block.block_hash,
+            parent_hash: block.parent_hash,
+            timestamp: block.timestamp,
+          };
+        },
+        this.MAX_HISTORICAL_BLOCK_CONCURRENT_REQUESTS
+      );
+      for (const b of fetchedBlocks) {
+        if (b) blocks.push(b);
+      }
+
+      const fetchDuration = Date.now() - time;
+      this.logger.debug(`[${TAG}] Fetched ${blocks.length} blocks in ${fetchDuration}ms`);
 
       // Process all blocks and their events in a single transaction
       await this.withTransaction(
@@ -618,7 +652,7 @@ export class StarknetIndexer {
           if (blocks.length > 0) {
             await this.dbHandler.batchInsertBlocks(blocks);
 
-            this.logger.info(
+            this.logger.debug(
               `[${TAG}] Inserted ${blocks.length} blocks in ${Date.now() - insertStart}ms`
             );
             const eventsStart = Date.now();
@@ -631,7 +665,7 @@ export class StarknetIndexer {
             } else {
               await this.processBlockEvents(blockNumber, chunkEndBlock);
             }
-            this.logger.info(`[${TAG}] Events processed in ${Date.now() - eventsStart}ms`);
+            this.logger.debug(`[${TAG}] Events processed in ${Date.now() - eventsStart}ms`);
           } else {
             this.logger.info(
               `[${TAG}] Skipping blocks ${blockNumber} to ${chunkEndBlock} - already processed`
@@ -671,7 +705,7 @@ export class StarknetIndexer {
         return;
       }
 
-      this.logger.info(`[${TAG}] Fetched ${blockEvents.length} events in ${fetchDuration}ms`);
+      this.logger.debug(`[${TAG}] Fetched ${blockEvents.length} events in ${fetchDuration}ms`);
 
       for (let eventIndex = 0; eventIndex < blockEvents.length; eventIndex++) {
         const event = blockEvents[eventIndex];

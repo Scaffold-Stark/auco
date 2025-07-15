@@ -22,3 +22,20 @@ export const groupConsecutiveBlocks = (blocks: number[]): BlockRange[] => {
   ranges.push({ from: start, to: end });
   return ranges;
 };
+
+export async function parallelMap<T, R>(
+  items: T[],
+  fn: (item: T) => Promise<R>,
+  concurrency: number
+): Promise<R[]> {
+  const results: R[] = [];
+  let i = 0;
+  async function worker() {
+    while (i < items.length) {
+      const idx = i++;
+      results[idx] = await fn(items[idx]);
+    }
+  }
+  await Promise.all(Array(concurrency).fill(0).map(worker));
+  return results;
+}

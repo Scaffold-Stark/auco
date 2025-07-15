@@ -17,6 +17,7 @@ A TypeScript/Node.js indexer for Starknet events, supporting PostgreSQL, SQLite,
 - 🔄 **Retry Logic**: Automatic retry mechanisms with exponential backoff
 - 📊 **Historical Processing**: Process historical blocks with seamless real-time transition
 - 🔌 **Multiple DB Support**: Supports PostgreSQL, SQLite, and MySQL out of the box.
+- ⚡ **High Performance**: Optimized for speed with parallel processing and efficient data handling
 
 ## Installation
 
@@ -131,6 +132,23 @@ indexer.start();
    ```bash
    npx ts-node example/mysql.ts
    ```
+
+## Performance
+
+AUCO is designed for high-performance event indexing with optimized parallel processing and efficient data handling. Our benchmarks demonstrate significant performance advantages:
+
+### Benchmark Results: Transfer Events on Starknet Mainnet
+
+| Metric | AUCO | APIBARA | Improvement |
+|--------|------|---------|-------------|
+| **Sync Time** | 147.63s | 270.50s | **83% faster** |
+| **Events Processed** | 159,885 | 152,604 | **4.8% more events** |
+
+**Benchmark Parameters:**
+- **Block Range**: 1,500,000 to 1,505,000 (5,000 blocks)
+- **Event Type**: Starknet Transfer events
+- **Total Events**: ~150,000 events processed
+- **Device**: MacBook M1 Pro (16GB RAM)
 
 ## Configuration
 
