@@ -9,7 +9,7 @@ import {
   WebSocketChannel,
 } from 'starknet';
 
-import { groupConsecutiveBlocks } from '../utils/blockUtils';
+import { groupConsecutiveBlocks, parallelMap } from '../utils/blockUtils';
 import {
   EventHandlerConfig,
   BaseEventHandlerConfig,
@@ -97,7 +97,6 @@ export class StarknetIndexer {
           };
 
           if (this.isProcessingHistoricalBlocks) {
-            this.logger.info(`Queuing block #${blockData.block_number} for later processing`);
             this.blockQueue.push(blockData);
           } else {
             this.logger.info(`Processing new block #${blockData.block_number}`);
@@ -581,32 +580,48 @@ export class StarknetIndexer {
 
       this.logger.info(`[${TAG}] Starting processing of ${chunkLabel}`);
 
-      // Pre-fetch all blocks and events before starting transaction
-      const blocks: any[] = [];
+      // Parallelize block fetching with concurrency control
+      const blockNumbersToFetch: number[] = [];
+
       for (let currentBlock = blockNumber; currentBlock <= chunkEndBlock; currentBlock++) {
         if (await this.checkIsBlockProcessed(currentBlock)) {
           this.logger.debug(`[${TAG}] Skipping block #${currentBlock} - already processed`);
           continue;
         }
-
-        const blockFetchStart = Date.now();
-        const block = await this.provider?.getBlock(currentBlock);
-        const fetchDuration = Date.now() - blockFetchStart;
-
-        if (!block || !block.block_hash) {
-          this.logger.error(
-            `[${TAG}] No block found for #${currentBlock} (fetch took ${fetchDuration}ms)`
-          );
-          continue;
-        }
-
-        blocks.push({
-          block_number: block.block_number,
-          block_hash: block.block_hash,
-          parent_hash: block.parent_hash,
-          timestamp: block.timestamp,
-        });
+        blockNumbersToFetch.push(currentBlock);
       }
+
+      const blocks: any[] = [];
+      const time = Date.now();
+      const fetchedBlocks = await parallelMap(
+        blockNumbersToFetch,
+        async (currentBlock) => {
+          const blockFetchStart = Date.now();
+          const block = await this.provider?.getBlock(currentBlock);
+          const fetchDuration = Date.now() - blockFetchStart;
+
+          if (!block || !block.block_hash) {
+            this.logger.error(
+              `[${TAG}] No block found for #${currentBlock} (fetch took ${fetchDuration}ms)`
+            );
+            return undefined;
+          }
+
+          return {
+            block_number: block.block_number,
+            block_hash: block.block_hash,
+            parent_hash: block.parent_hash,
+            timestamp: block.timestamp,
+          };
+        },
+        30
+      );
+      for (const b of fetchedBlocks) {
+        if (b) blocks.push(b);
+      }
+
+      const fetchDuration = Date.now() - time;
+      this.logger.info(`[${TAG}] Fetched ${blocks.length} blocks in ${fetchDuration}ms`);
 
       // Process all blocks and their events in a single transaction
       await this.withTransaction(
