@@ -81,9 +81,9 @@ export class StarknetIndexer {
       this.logger.error('Failed to initialize RPC provider:', error);
     }
 
-    // Set concurrency for historical block fetching (default: 10, configurable)
+    // Set concurrency for historical block fetching (default: 5, configurable)
     this.MAX_HISTORICAL_BLOCK_CONCURRENT_REQUESTS =
-      config.maxHistoricalBlockConcurrentRequests ?? 10;
+      config.maxHistoricalBlockConcurrentRequests ?? 5;
 
     this.setupEventHandlers();
   }
