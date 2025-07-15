@@ -701,7 +701,6 @@ export class StarknetIndexer {
       const fetchDuration = Date.now() - fetchStart;
 
       if (!blockEvents || blockEvents.length === 0) {
-        this.logger.error(`No events found for block #${fromBlock} to #${toBlock}`);
         return;
       }
 
@@ -806,7 +805,8 @@ export class StarknetIndexer {
     operation: string,
     fn: () => Promise<T>,
     maxRetries: number = 5,
-    initialDelay: number = 500
+    initialDelay: number = 500,
+    silent: boolean = true
   ): Promise<T | undefined> {
     let retries = 0;
     let delay = initialDelay;
@@ -817,14 +817,18 @@ export class StarknetIndexer {
       } catch (error) {
         retries++;
         if (retries === maxRetries) {
-          this.logger.error(`${operation} failed after ${maxRetries} retries:`, error);
+          if (!silent) {
+            this.logger.error(`${operation} failed after ${maxRetries} retries:`, error);
+          }
           return undefined;
         }
 
-        this.logger.warn(
-          `${operation} failed, retrying in ${delay}ms (attempt ${retries}/${maxRetries}):`,
-          error
-        );
+        if (!silent) {
+          this.logger.warn(
+            `${operation} failed, retrying in ${delay}ms (attempt ${retries}/${maxRetries}):`,
+            error
+          );
+        }
 
         await new Promise((resolve) => setTimeout(resolve, delay));
         delay = Math.min(delay * 2, 30000); // Double the delay, max 30 seconds
