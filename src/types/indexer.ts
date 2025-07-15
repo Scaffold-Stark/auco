@@ -96,6 +96,17 @@ export interface IndexerConfig {
 
   /** Custom logger instance to use instead of default ConsoleLogger */
   logger?: Logger;
+
+  /** Maximum number of concurrent block fetch requests (default: 10) */
+  maxConcurrentRequests?: number;
+
+  /**
+   * Maximum number of concurrent requests for fetching historical blocks (default: 10)
+   * This controls how many historical blocks are fetched and processed in parallel during
+   * catch-up or backfill operations. Increasing this value can speed up historical syncs,
+   * but may increase load on the node and database.
+   */
+  maxHistoricalBlockConcurrentRequests?: number;
 }
 
 export type StarknetEvent<TAbi extends Abi, TEventName extends string> = {
