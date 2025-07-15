@@ -66,14 +66,35 @@ type DatabaseConfig =
       config: SqliteDbHandlerConfig;
     };
 
+/**
+ * Configuration interface for the StarknetIndexer
+ *
+ * This interface defines all the configuration options needed to initialize
+ * and run a Starknet indexer instance.
+ */
 export interface IndexerConfig {
+  /** RPC node URL for fetching block data and events */
   rpcNodeUrl: string;
+
+  /** WebSocket node URL for real-time block updates and event subscriptions */
   wsNodeUrl: string;
+
+  /** Database configuration for storing indexed data and cursor state */
   database: DatabaseConfig;
+
+  /** Block number to start indexing from, or 'latest' to start from current block */
   startingBlockNumber: number | 'latest';
+
+  /** Optional array of contract addresses to monitor for events */
   contractAddresses?: string[];
+
+  /** Unique key for tracking indexer progress in the database */
   cursorKey?: string;
+
+  /** Log level for controlling output verbosity */
   logLevel?: LogLevel;
+
+  /** Custom logger instance to use instead of default ConsoleLogger */
   logger?: Logger;
 }
 

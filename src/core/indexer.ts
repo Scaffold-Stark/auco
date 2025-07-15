@@ -55,7 +55,7 @@ export class StarknetIndexer {
   private retryTimeout?: NodeJS.Timeout;
   private readonly RETRY_INTERVAL = 10000; // 10 seconds between retry checks
   private readonly reconnectDelay: number = 1000;
-
+  private readonly MAX_HISTORICAL_BLOCK_CONCURRENT_REQUESTS: number = 10;
   private wsUrl: string;
 
   constructor(private config: IndexerConfig) {
@@ -629,7 +629,7 @@ export class StarknetIndexer {
             timestamp: block.timestamp,
           };
         },
-        30
+        this.MAX_HISTORICAL_BLOCK_CONCURRENT_REQUESTS
       );
       for (const b of fetchedBlocks) {
         if (b) blocks.push(b);
