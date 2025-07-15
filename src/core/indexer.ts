@@ -555,17 +555,32 @@ export class StarknetIndexer {
     let continuationToken;
     let allEvents: EmittedEvent[] = [];
 
-    do {
-      const response = await this.provider.getEvents({
-        from_block: { block_number: fromBlock },
-        to_block: { block_number: toBlock },
-        chunk_size: 1000,
-        continuation_token: continuationToken,
-      });
+    // Get all unique event selectors from registered handlers
+    const eventSelectors = new Set<string>();
+    for (const [handlerKey] of this.eventHandlers.entries()) {
+      if (handlerKey.includes(':')) {
+        const eventSelector = handlerKey.split(':')[1];
+        eventSelectors.add(eventSelector);
+      }
+    }
 
-      allEvents = [...allEvents, ...response.events];
-      continuationToken = response.continuation_token;
-    } while (continuationToken);
+    const keys = Array.from(eventSelectors).map((selector) => [selector]);
+
+    for (const contractAddress of this.contractAddresses) {
+      do {
+        const response = await this.provider.getEvents({
+          from_block: { block_number: fromBlock },
+          to_block: { block_number: toBlock },
+          address: contractAddress,
+          keys: keys.length > 0 ? keys : undefined,
+          chunk_size: 1000,
+          continuation_token: continuationToken,
+        });
+
+        allEvents = [...allEvents, ...response.events];
+        continuationToken = response.continuation_token;
+      } while (continuationToken);
+    }
 
     return allEvents;
   }
