@@ -81,11 +81,13 @@ export type EventToPrimitiveType<TAbi extends Abi, TEventName extends string> = 
   [K in keyof TAbi]: TAbi[K] extends {
     type: 'event';
     name: TEventName;
-    kind: 'struct'; // Only struct events
+    kind: 'struct';
     members: infer TMembers extends readonly AbiEventMember[];
   }
     ? {
-        [Member in TMembers[number] as Member['name']]: StringToPrimitiveType<TAbi, Member['type']>;
+        [Member in TMembers[number] as Member['name']]: Member['type'] extends 'core::starknet::contract_address::ContractAddress'
+          ? bigint
+          : StringToPrimitiveType<TAbi, Member['type']>;
       }
     : never;
 }[number];
