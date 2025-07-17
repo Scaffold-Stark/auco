@@ -3,14 +3,14 @@ import abi from './abi/ABI';
 
 const indexer = new StarknetIndexer({
   // Change your node urls here if needed
-  rpcNodeUrl: 'https://starknet-sepolia-rpc.publicnode.com',
-  wsNodeUrl: 'wss://starknet-sepolia-rpc.publicnode.com',
+  rpcNodeUrl: 'https://starknet-mainnet.blastapi.io/4bfb6a18-ad4e-49ef-ab65-e1e00be11fb1/rpc/v0_8',
+  wsNodeUrl: 'wss://starknet-mainnet.blastapi.io/4bfb6a18-ad4e-49ef-ab65-e1e00be11fb1/rpc/v0_8',
 
   // Change your database connection string here if needed
   database: {
     type: 'postgres',
     config: {
-      connectionString: 'postgresql://postgres:postgres@localhost:5432/starknet_indexer',
+      connectionString: 'postgresql://postgres:password123@127.0.0.1:6500/app',
     },
   },
 
@@ -23,7 +23,6 @@ indexer.onEvent({
   abi: abi,
   eventName: 'src::strk::erc20_lockable::ERC20Lockable::Transfer',
   handler: async (event) => {
-    console.log('Received event', event);
   },
 });
 

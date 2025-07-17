@@ -24,6 +24,7 @@ indexer.onEvent({
   eventName: 'src::strk::erc20_lockable::ERC20Lockable::Transfer',
   handler: async (event) => {
     console.log('Received event', event);
+    event.parsed.
   },
 });
 
