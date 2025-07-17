@@ -569,28 +569,38 @@ export class StarknetIndexer {
       return;
     }
 
-    let continuationToken;
     let allEvents: EmittedEvent[] = [];
+    let continuationToken: string | undefined;
 
-    // Get all unique event selectors from registered handlers
-    const eventSelectors = new Set<string>();
+    // Group event selectors by contract address
+    const contractEventSelectors = new Map<string, Set<string>>();
+
     for (const [handlerKey] of this.eventHandlers.entries()) {
       if (handlerKey.includes(':')) {
-        const eventSelector = handlerKey.split(':')[1];
-        eventSelectors.add(eventSelector);
+        const [contractAddress, eventSelector] = handlerKey.split(':');
+        if (!contractEventSelectors.has(contractAddress)) {
+          contractEventSelectors.set(contractAddress, new Set());
+        }
+        contractEventSelectors.get(contractAddress)!.add(eventSelector);
       }
     }
 
-    const keys = Array.from(eventSelectors).map((selector) => [selector]);
-
     for (const contractAddress of this.contractAddresses) {
+      const eventSelectors = contractEventSelectors.get(contractAddress);
+      const keys =
+        eventSelectors && eventSelectors.size > 0 ? [Array.from(eventSelectors)] : undefined;
+
+      if (keys === undefined) {
+        continue;
+      }
+
       do {
         this.progressStats.incrementRpcRequest();
         const response = await this.provider.getEvents({
           from_block: { block_number: fromBlock },
           to_block: { block_number: toBlock },
           address: contractAddress,
-          keys: keys.length > 0 ? keys : undefined,
+          keys: keys && keys.length > 0 ? keys : undefined,
           chunk_size: 1000,
           continuation_token: continuationToken,
         });
