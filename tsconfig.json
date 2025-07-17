@@ -11,7 +11,7 @@
     "noImplicitAny": false,
     "resolveJsonModule": true
   },
-  "include": ["src/**/*", "example/benchmark.ts"],
+  "include": ["src/**/*"],
   "exclude": [
     "node_modules", 
     "dist", 
