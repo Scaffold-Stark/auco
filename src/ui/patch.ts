@@ -1,4 +1,4 @@
-import ansi from 'ansi-escapes';
+let ansi: any;
 
 export function patchWriteStreams({ getLines }: { getLines: () => string[] }) {
   const originalStdoutWrite = process.stdout.write;
@@ -14,6 +14,8 @@ export function patchWriteStreams({ getLines }: { getLines: () => string[] }) {
   };
 
   (async () => {
+    const mod = await import('ansi-escapes');
+    ansi = mod.default || mod;
     terminalWidth = await getTerminalWidth();
   })();
 
