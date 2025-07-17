@@ -551,6 +551,11 @@ export class StarknetIndexer {
     fromBlock: number,
     toBlock: number
   ): Promise<EmittedEvent[] | undefined> {
+    if (!this.provider || !this.contractAddresses) {
+      this.logger.error('No provider or contract addresses found');
+      return;
+    }
+
     let allEvents: EmittedEvent[] = [];
     let continuationToken: string | undefined;
 
