@@ -96,6 +96,23 @@ export class StarknetIndexer {
       this.logger.error('WebSocket error:', error);
     });
 
+    this.wsChannel.on('message', async (event: MessageEvent) => {
+      try {
+        const data = typeof event.data === 'string' ? JSON.parse(event.data) : event.data;
+        if (
+          data &&
+          data.method === 'starknet_subscriptionReorg' &&
+          data.params?.result?.starting_block_number
+        ) {
+          const reorgPoint = data.params.result.starting_block_number;
+          this.logger.info(`Handling reorg from block #${reorgPoint} (via WS reorg event)`);
+          await this.handleReorg(reorgPoint);
+        }
+      } catch (err) {
+        this.logger.error('Error parsing WebSocket message for reorg:', err);
+      }
+    });
+
     this.wsChannel.on('close', async (event) => {
       if (this.started) {
         this.logger.debug('Connection closed, attempting to reconnect...');
