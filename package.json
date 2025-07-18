@@ -10,7 +10,7 @@
     "lint:fix": "eslint . --ext .ts --fix",
     "format": "prettier --write \"**/*.{ts,js,json,md}\"",
     "postinstall": "npx patch-package",
-    "test": "jest --passWithNoTests --forceExit"
+    "test": "jest --passWithNoTests --forceExit --config ./jest.config.js"
   },
   "dependencies": {
     "@types/better-sqlite3": "^7.6.13",
