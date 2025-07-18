@@ -19,7 +19,7 @@
     "mysql2": "^3.14.1",
     "patch-package": "^8.0.0",
     "pg": "^8.11.0",
-    "starknet": "7.1.0"
+    "starknet": "7.6.2"
   },
   "devDependencies": {
     "@types/jest": "^29.5.3",

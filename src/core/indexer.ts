@@ -7,6 +7,7 @@ import {
   Abi,
   EmittedEvent,
   WebSocketChannel,
+  Subscription,
 } from 'starknet';
 
 import { groupConsecutiveBlocks, parallelMap } from '../utils/blockUtils';
@@ -38,6 +39,7 @@ type ExtractStructEventNames<TAbi extends Abi> = {
 
 export class StarknetIndexer {
   private wsChannel: WebSocketChannel;
+  private newHeadsSubscription?: Subscription<any>;
   private eventHandlers: Map<string, BaseEventHandlerConfig[]> = new Map();
   private reorgHandler: ReorgHandler | null = null; // using dedicated variable to avoid type conflicts
   private started: boolean = false;
@@ -76,7 +78,7 @@ export class StarknetIndexer {
     }
 
     try {
-      this.provider = new RpcProvider({ nodeUrl: config.rpcNodeUrl, specVersion: '0.8' });
+      this.provider = new RpcProvider({ nodeUrl: config.rpcNodeUrl, specVersion: '0.8.1' });
     } catch (error) {
       this.logger.error('Failed to initialize RPC provider:', error);
     }
@@ -89,41 +91,12 @@ export class StarknetIndexer {
   }
 
   private setupEventHandlers() {
-    this.wsChannel.onNewHeads = async (data) => {
-      await this.withErrorHandling(
-        'Processing new head',
-        async () => {
-          const blockData = {
-            block_number: data.result.block_number,
-            block_hash: data.result.block_hash,
-            parent_hash: data.result.parent_hash,
-            timestamp: data.result.timestamp,
-          };
-
-          if (this.isProcessingHistoricalBlocks) {
-            this.blockQueue.push(blockData);
-          } else {
-            this.logger.info(`Processing new block #${blockData.block_number}`);
-            await this.processNewHead(blockData);
-          }
-        },
-        { blockNumber: data.result.block_number }
-      );
-    };
-
-    this.wsChannel.onReorg = async (data) => {
-      const reorgPoint = data.result?.starting_block_number;
-      if (reorgPoint) {
-        this.logger.info(`Handling reorg from block #${reorgPoint}`);
-        await this.handleReorg(reorgPoint);
-      }
-    };
-
-    this.wsChannel.onError = (error) => {
+    // Set up WebSocket channel event listeners
+    this.wsChannel.on('error', (error) => {
       this.logger.error('WebSocket error:', error);
-    };
+    });
 
-    this.wsChannel.onClose = async (event) => {
+    this.wsChannel.on('close', async (event) => {
       if (this.started) {
         this.logger.debug('Connection closed, attempting to reconnect...');
         this.logger.debug('Reason: ', event.reason);
@@ -140,11 +113,42 @@ export class StarknetIndexer {
           this.logger.debug('Setup Event Handlers Successfully');
           await this.wsChannel.waitForConnection();
           this.logger.debug('Wait For Connection Successfully');
-          await this.wsChannel.subscribeNewHeads();
+          await this.subscribeToNewHeads();
           this.logger.debug('Subscribe New Heads Successfully');
         });
       }
-    };
+    });
+  }
+
+  private async subscribeToNewHeads() {
+    try {
+      this.newHeadsSubscription = await this.wsChannel.subscribeNewHeads();
+
+      this.newHeadsSubscription.on(async (data) => {
+        await this.withErrorHandling(
+          'Processing new head',
+          async () => {
+            const blockData = {
+              block_number: data.block_number,
+              block_hash: data.block_hash,
+              parent_hash: data.parent_hash,
+              timestamp: data.timestamp,
+            };
+
+            if (this.isProcessingHistoricalBlocks) {
+              this.blockQueue.push(blockData);
+            } else {
+              this.logger.info(`Processing new block #${blockData.block_number}`);
+              await this.processNewHead(blockData);
+            }
+          },
+          { blockNumber: data.block_number }
+        );
+      });
+    } catch (error) {
+      this.logger.error('Failed to subscribe to new heads:', error);
+      throw error;
+    }
   }
 
   private getEventSelector(eventName: string): string {
@@ -366,7 +370,7 @@ export class StarknetIndexer {
 
     try {
       this.logger.info('[WebSocket] Subscribing to new heads...');
-      await this.wsChannel.subscribeNewHeads();
+      await this.subscribeToNewHeads();
       this.started = true;
       this.logger.info('[WebSocket] Successfully subscribed to new heads');
     } catch (error) {
