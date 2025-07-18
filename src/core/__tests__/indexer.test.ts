@@ -14,7 +14,7 @@ describe('StarknetIndexer', () => {
       wsNodeUrl: 'ws://localhost:9945',
       database: {
         type: 'sqlite',
-        config: { dbInstance: new Database(':memory:') },
+        config: { dbInstance: new Database('./memory.db') },
       },
       startingBlockNumber: 0,
     });
