@@ -133,6 +133,73 @@ indexer.start();
    npx ts-node example/mysql.ts
    ```
 
+## ABI Downloader CLI
+
+You can download contract ABIs directly from Starknet nodes using the built-in CLI script. This is useful for generating TypeScript ABI files for your project.
+
+### Usage
+
+Run the script with `npx` (recommended) or directly with `ts-node`/`node`:
+
+#### Single Contract
+
+Download the ABI for a single contract:
+
+```bash
+npx ts-node src/scripts/download-abi.ts single \
+  --rpc-url <STARKNET_RPC_URL> \
+  --address <CONTRACT_ADDRESS> \
+  --name <CONTRACT_NAME> \
+  [--output <OUTPUT_DIR>]
+```
+
+- `--rpc-url` (required): Starknet RPC endpoint URL
+- `--address` (required): Contract address
+- `--name` (required): Name for the generated ABI file (no extension)
+- `--output` (optional): Output directory (default: `generated/abis`)
+
+**Example:**
+```bash
+npx ts-node src/scripts/download-abi.ts single \
+  --rpc-url https://starknet-mainnet.infura.io/v3/YOUR_KEY \
+  --address 0x123...abc \
+  --name MyContract
+```
+
+#### Batch Mode
+
+Download ABIs for multiple contracts defined in a JSON file:
+
+1. Create a JSON file (e.g., `contracts.json`) with the following format:
+   ```json
+   {
+     "MyContract": "0x123...abc",
+     "AnotherContract": "0x456...def"
+   }
+   ```
+
+2. Run:
+   ```bash
+   npx ts-node src/scripts/download-abi.ts batch \
+     --rpc-url <STARKNET_RPC_URL> \
+     --file contracts.json \
+     [--output <OUTPUT_DIR>]
+   ```
+
+- `--file` (required): Path to the JSON file mapping contract names to addresses
+- Other options as above
+
+**Example:**
+```bash
+npx ts-node src/scripts/download-abi.ts batch \
+  --rpc-url https://starknet-mainnet.infura.io/v3/YOUR_KEY \
+  --file contracts.json
+```
+
+The script will generate TypeScript ABI files in the specified output directory and create an `index.ts` exporting all ABIs.
+
+---
+
 ## Performance
 
 AUCO is designed for high-performance event indexing with optimized parallel processing and efficient data handling. Our benchmarks demonstrate significant performance advantages:
