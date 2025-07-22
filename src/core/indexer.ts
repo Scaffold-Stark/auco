@@ -25,6 +25,8 @@ import {
 } from '../types/indexer';
 import { BaseDbHandler } from '../utils/db/base-db-handler';
 import { initializeDbHandler } from '../utils/db/helpers/initialize-db-handler';
+import { setupProgressUi } from '../ui/progress';
+import { ProgressStats } from './progressStats';
 
 // Extract only struct event names from ABI - provides intellisense for event names
 type ExtractStructEventNames<TAbi extends Abi> = {
@@ -60,8 +62,12 @@ export class StarknetIndexer {
   private readonly MAX_HISTORICAL_BLOCK_CONCURRENT_REQUESTS: number;
   private wsUrl: string;
 
+  private progressStats: ProgressStats;
+  private progressUiShutdown?: () => void;
+
   constructor(private config: IndexerConfig) {
     this.logger = config.logger || new ConsoleLogger(config.logLevel);
+    this.progressStats = new ProgressStats();
 
     this.wsUrl = config.wsNodeUrl;
 
@@ -267,14 +273,13 @@ export class StarknetIndexer {
         let startingBlock: number;
         if (this.config.startingBlockNumber === 'latest') {
           if (!this.provider) throw new Error('Provider not initialized');
+          this.progressStats.incrementRpcRequest();
           startingBlock = await this.provider.getBlockNumber();
         } else {
           startingBlock = this.config.startingBlockNumber;
         }
         this.cursor = { blockNumber: startingBlock, blockHash: '' };
-
         await this.dbHandler.initializeIndexerState(startingBlock, this.config.cursorKey);
-
         return startingBlock;
       } else {
         this.cursor = {
@@ -368,7 +373,11 @@ export class StarknetIndexer {
     await this.dbHandler.connect();
     this.logger.info('[Database] Connection established');
 
-    const currentBlock = this.provider ? await this.provider.getBlockNumber() : 0;
+    let currentBlock = 0;
+    if (this.provider) {
+      this.progressStats.incrementRpcRequest();
+      currentBlock = await this.provider.getBlockNumber();
+    }
     let targetBlock: number;
     if (this.config.startingBlockNumber === 'latest') {
       targetBlock = currentBlock;
@@ -394,6 +403,8 @@ export class StarknetIndexer {
       this.logger.error('[WebSocket] Failed to subscribe to new heads:', error);
       throw error;
     }
+
+    this.startProgressUiLoop();
 
     if (targetBlock < currentBlock && this.provider) {
       this.isProcessingHistoricalBlocks = true;
@@ -437,6 +448,7 @@ export class StarknetIndexer {
         },
         { blockNumber: blockData.block_number }
       );
+      // No need to call updateEvent for blocks unless you want to track them as events
     } catch (error) {
       this.logger.error(`Failed to process block #${blockData.block_number}:`, error);
       this.addFailedBlock(blockData, error);
@@ -514,6 +526,7 @@ export class StarknetIndexer {
       clearTimeout(this.retryTimeout);
       this.retryTimeout = undefined;
     }
+    this.stopProgressUiLoop();
 
     // Close persistent database connection
     if (this.dbHandler.isConnected()) {
@@ -603,7 +616,8 @@ export class StarknetIndexer {
       }
 
       do {
-        const response = await this.provider!.getEvents({
+        this.progressStats.incrementRpcRequest();
+        const response = await this.provider.getEvents({
           from_block: { block_number: fromBlock },
           to_block: { block_number: toBlock },
           address: contractAddress,
@@ -623,6 +637,9 @@ export class StarknetIndexer {
   private async processHistoricalBlocks(fromBlock: number, toBlock: number): Promise<void> {
     const chunkSize = 100;
     const TAG = 'processHistoricalBlocks';
+
+    // Initialize stats for progress logging
+    this.progressStats.initSyncStats(fromBlock, toBlock);
 
     for (let blockNumber = fromBlock; blockNumber <= toBlock; blockNumber += chunkSize) {
       const chunkEndBlock = Math.min(blockNumber + chunkSize - 1, toBlock);
@@ -647,6 +664,7 @@ export class StarknetIndexer {
         blockNumbersToFetch,
         async (currentBlock) => {
           const blockFetchStart = Date.now();
+          this.progressStats.incrementRpcRequest();
           const block = await this.provider?.getBlock(currentBlock);
           const fetchDuration = Date.now() - blockFetchStart;
 
@@ -796,7 +814,9 @@ export class StarknetIndexer {
                   parsed: parsedValues, // Add the parsed values directly
                 };
                 parsedEvent = parsedEventWithOriginal;
-                this.logger.debug(`Parsed event values:`, parsedValues);
+                // this.logger.debug(`Parsed event values:`, parsedValues);
+                const eventName = eventKey;
+                this.progressStats.updateEvent(event.block_number, eventName, fromAddress);
               }
             } catch (error) {
               this.logger.error(`Error parsing event from contract ${fromAddress}:`, error);
@@ -929,5 +949,17 @@ export class StarknetIndexer {
     };
 
     retryProcess();
+  }
+
+  private startProgressUiLoop() {
+    if (this.progressUiShutdown) return;
+    this.progressUiShutdown = setupProgressUi(() => this.progressStats.getUiState());
+  }
+
+  private stopProgressUiLoop() {
+    if (this.progressUiShutdown) {
+      this.progressUiShutdown();
+      this.progressUiShutdown = undefined;
+    }
   }
 }
