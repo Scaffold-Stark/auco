@@ -1,6 +1,6 @@
 {
   "name": "auco",
-  "version": "0.0.10",
+  "version": "0.0.11",
   "main": "dist/index.js",
   "types": "dist/index.d.ts",
   "scripts": {
@@ -10,7 +10,7 @@
     "lint:fix": "eslint . --ext .ts --fix",
     "format": "prettier --write \"**/*.{ts,js,json,md}\"",
     "postinstall": "npx patch-package",
-    "test": "jest --passWithNoTests --forceExit"
+    "test": "jest --passWithNoTests --forceExit --config ./jest.config.js"
   },
   "dependencies": {
     "@types/better-sqlite3": "^7.6.13",
@@ -19,7 +19,7 @@
     "mysql2": "^3.14.1",
     "patch-package": "^8.0.0",
     "pg": "^8.11.0",
-    "starknet": "7.1.0",
+    "starknet": "7.6.2",
     "terminal-size": "^4.0.0"
   },
   "devDependencies": {

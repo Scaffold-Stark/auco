@@ -14,7 +14,7 @@ describe('StarknetIndexer', () => {
       wsNodeUrl: 'ws://localhost:9945',
       database: {
         type: 'sqlite',
-        config: { dbInstance: new Database(':memory:') },
+        config: { dbInstance: new Database('./memory.db') },
       },
       startingBlockNumber: 0,
     });
@@ -27,7 +27,7 @@ describe('StarknetIndexer', () => {
       wsNodeUrl: 'ws://localhost:9945',
       database: {
         type: 'sqlite',
-        config: { dbInstance: new Database(':memory:') },
+        config: { dbInstance: new Database('./memory.db') },
       },
       startingBlockNumber: 0,
     });
@@ -47,7 +47,7 @@ describe('StarknetIndexer', () => {
       wsNodeUrl: 'ws://localhost:9945',
       database: {
         type: 'sqlite',
-        config: { dbInstance: new Database(':memory:') },
+        config: { dbInstance: new Database('./memory.db') },
       },
       startingBlockNumber: 0,
     });
@@ -95,7 +95,7 @@ describe('StarknetIndexer', () => {
         wsNodeUrl: 'ws://127.0.0.1:5050/ws',
         database: {
           type: 'sqlite',
-          config: { dbInstance: new Database(':memory:') },
+          config: { dbInstance: new Database('./memory.db') },
         },
         startingBlockNumber: 1,
         contractAddresses: [contractAddress],
