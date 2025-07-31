@@ -538,6 +538,25 @@ export class StarknetIndexer {
     this.logger.info('Indexer stopped');
   }
 
+  public async healthCheck(): Promise<void> {
+    this.logger.info('Checking health...');
+
+    try {
+      await Promise.all([this.dbHandler.healthCheck(), this.provider?.getBlockNumber()]);
+
+      // ws check
+      if (this.wsChannel.isConnected()) {
+        this.logger.error('WebSocket connection not healthy, exiting... ');
+        throw new Error('WebSocket connection not healthy');
+      }
+    } catch (error) {
+      this.logger.error('Health check failed:', error);
+      throw new Error('Health check failed');
+    }
+
+    this.logger.info('Health check passed');
+  }
+
   private async processBlockQueue(): Promise<void> {
     if (this.blockQueue.length === 0) return;
     const TAG = 'processBlockQueue';
