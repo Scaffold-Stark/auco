@@ -342,4 +342,18 @@ export class MysqlDbHandler extends BaseDbHandler {
     const [rows] = await this.execute(query, params);
     return { rows };
   }
+
+  async healthCheck(): Promise<boolean> {
+    if (!this.connection) {
+      throw new Error('Database connection not initialized');
+    }
+
+    try {
+      await this.connection.query('SELECT 1');
+      return true;
+    } catch (error) {
+      console.error('Database health check failed:', error);
+      return false;
+    }
+  }
 }

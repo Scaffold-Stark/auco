@@ -40,4 +40,6 @@ export abstract class BaseDbHandler {
   abstract query(query: string, params: any[]): Promise<any>;
 
   abstract cleanup(): Promise<void>;
+
+  abstract healthCheck(): Promise<boolean>;
 }
