@@ -54,10 +54,12 @@ export class StarknetIndexer {
   private logger: Logger;
   private pollTimeout?: NodeJS.Timeout;
   private readonly dbHandler: BaseDbHandler;
+  private healthCheckInterval?: NodeJS.Timeout;
 
   private failedBlocks: number[] = [];
   private retryTimeout?: NodeJS.Timeout;
   private readonly RETRY_INTERVAL = 10000; // 10 seconds between retry checks
+  private readonly HEALTH_CHECK_INTERVAL = 3000; // 1 second between health checks
   private readonly reconnectDelay: number = 1000;
   private readonly MAX_HISTORICAL_BLOCK_CONCURRENT_REQUESTS: number;
   private wsUrl: string;
@@ -414,6 +416,12 @@ export class StarknetIndexer {
     this.logger.info('[Indexer] Processing queued blocks...');
     await this.processBlockQueue();
     this.logger.info('[Indexer] Finished processing queued blocks');
+
+    // start health check interval
+    this.healthCheckInterval = setInterval(async () => {
+      const health = await this.healthCheck();
+      this.progressStats.updateHealth(health);
+    }, this.HEALTH_CHECK_INTERVAL);
   }
 
   // Process a new block head
@@ -522,6 +530,11 @@ export class StarknetIndexer {
     if (this.pollTimeout) {
       clearTimeout(this.pollTimeout);
     }
+
+    if (this.healthCheckInterval) {
+      clearInterval(this.healthCheckInterval);
+    }
+
     if (this.retryTimeout) {
       clearTimeout(this.retryTimeout);
       this.retryTimeout = undefined;
@@ -536,6 +549,49 @@ export class StarknetIndexer {
     }
 
     this.logger.info('Indexer stopped');
+  }
+
+  public async healthCheck(): Promise<{ database: boolean; ws: boolean; rpc: boolean }> {
+    this.logger.info('Checking health...');
+
+    let databaseHealthy = true;
+    let wsHealthy = true;
+    let rpcHealthy = true;
+
+    // Perform health checks - separate try-catch blocks for each function
+    try {
+      await this.dbHandler.healthCheck();
+    } catch (error) {
+      this.logger.error('Database health check failed:', error);
+      databaseHealthy = false;
+    }
+
+    try {
+      let blockNumber: number;
+      if (!this.provider) {
+        this.logger.error('RPC provider not initialized');
+        rpcHealthy = false;
+        blockNumber = -1;
+      } else {
+        blockNumber = await this.provider.getBlockNumber();
+        // Validate provider response
+        if (typeof blockNumber !== 'number' || blockNumber < 0) {
+          this.logger.error('Invalid block number returned from provider');
+          rpcHealthy = false;
+        }
+      }
+    } catch (error) {
+      this.logger.error('RPC provider health check failed:', error);
+      rpcHealthy = false;
+    }
+
+    // WebSocket check
+    if (!this.wsChannel.isConnected()) {
+      this.logger.error('WebSocket disconnected');
+      wsHealthy = false;
+    }
+
+    return { database: databaseHealthy, ws: wsHealthy, rpc: rpcHealthy };
   }
 
   private async processBlockQueue(): Promise<void> {

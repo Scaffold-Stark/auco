@@ -357,4 +357,17 @@ export class SqliteDbHandler extends BaseDbHandler {
       }
     }
   }
+
+  async healthCheck(): Promise<void> {
+    if (!this.db) {
+      throw new Error('Database not initialized');
+    }
+
+    try {
+      this.db.exec('SELECT 1');
+    } catch (error) {
+      console.error('Database health check failed:', error);
+      throw error;
+    }
+  }
 }
