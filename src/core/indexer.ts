@@ -538,36 +538,47 @@ export class StarknetIndexer {
     this.logger.info('Indexer stopped');
   }
 
-  public async healthCheck(): Promise<void> {
+  public async healthCheck(): Promise<{ database: boolean; ws: boolean; rpc: boolean }> {
     this.logger.info('Checking health...');
 
+    let databaseHealthy = true;
+    let wsHealthy = true;
+    let rpcHealthy = true;
+
+    // Perform health checks - separate try-catch blocks for each function
     try {
-      // Check if provider exists
-      if (!this.provider) {
-        throw new Error('RPC provider not initialized');
-      }
-
-      // Perform health checks - dbHandler.healthCheck() returns void but throws on failure
-      const [, blockNumber] = await Promise.all([
-        this.dbHandler.healthCheck(),
-        this.provider.getBlockNumber(),
-      ]);
-
-      // Validate provider response
-      if (typeof blockNumber !== 'number' || blockNumber < 0) {
-        throw new Error('Invalid block number returned from provider');
-      }
-
-      // WebSocket check
-      if (!this.wsChannel.isConnected()) {
-        throw new Error('WebSocket connection not healthy');
-      }
+      await this.dbHandler.healthCheck();
     } catch (error) {
-      this.logger.error('Health check failed:', error);
-      throw error; // Re-throw original error to preserve details
+      this.logger.error('Database health check failed:', error);
+      databaseHealthy = false;
     }
 
-    this.logger.info('Health check passed');
+    try {
+      let blockNumber: number;
+      if (!this.provider) {
+        this.logger.error('RPC provider not initialized');
+        rpcHealthy = false;
+        blockNumber = -1;
+      } else {
+        blockNumber = await this.provider.getBlockNumber();
+        // Validate provider response
+        if (typeof blockNumber !== 'number' || blockNumber < 0) {
+          this.logger.error('Invalid block number returned from provider');
+          rpcHealthy = false;
+        }
+      }
+    } catch (error) {
+      this.logger.error('RPC provider health check failed:', error);
+      rpcHealthy = false;
+    }
+
+    // WebSocket check
+    if (!this.wsChannel.isConnected()) {
+      this.logger.error('WebSocket disconnected');
+      wsHealthy = false;
+    }
+
+    return { database: databaseHealthy, ws: wsHealthy, rpc: rpcHealthy };
   }
 
   private async processBlockQueue(): Promise<void> {
