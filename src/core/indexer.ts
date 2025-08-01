@@ -519,6 +519,19 @@ export class StarknetIndexer {
     this.logger.info('Stopping indexer...');
     this.started = false;
 
+    // close websocket
+    // HELP NEEDED HERE: we cannot properly close the indexer wihtout unsubscribing, the loop will go on even we call Stop.
+    if (this.wsChannel.isConnected()) {
+      this.logger.info('[WebSocket] Closing connection...');
+      if (this.newHeadsSubscription?.id) {
+        this.logger.info('unsubscribing from new heads', this.newHeadsSubscription.id);
+        // this.wsChannel.unsubscribe(this.newHeadsSubscription.id);
+        await this.newHeadsSubscription.unsubscribe();
+      }
+      this.wsChannel.disconnect();
+      this.logger.info('[WebSocket] Connection closed');
+    }
+
     if (this.pollTimeout) {
       clearTimeout(this.pollTimeout);
     }
