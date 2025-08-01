@@ -542,16 +542,29 @@ export class StarknetIndexer {
     this.logger.info('Checking health...');
 
     try {
-      await Promise.all([this.dbHandler.healthCheck(), this.provider?.getBlockNumber()]);
+      // Check if provider exists
+      if (!this.provider) {
+        throw new Error('RPC provider not initialized');
+      }
 
-      // ws check
-      if (this.wsChannel.isConnected()) {
-        this.logger.error('WebSocket connection not healthy, exiting... ');
+      // Perform health checks - dbHandler.healthCheck() returns void but throws on failure
+      const [, blockNumber] = await Promise.all([
+        this.dbHandler.healthCheck(),
+        this.provider.getBlockNumber(),
+      ]);
+
+      // Validate provider response
+      if (typeof blockNumber !== 'number' || blockNumber < 0) {
+        throw new Error('Invalid block number returned from provider');
+      }
+
+      // WebSocket check
+      if (!this.wsChannel.isConnected()) {
         throw new Error('WebSocket connection not healthy');
       }
     } catch (error) {
       this.logger.error('Health check failed:', error);
-      throw new Error('Health check failed');
+      throw error; // Re-throw original error to preserve details
     }
 
     this.logger.info('Health check passed');

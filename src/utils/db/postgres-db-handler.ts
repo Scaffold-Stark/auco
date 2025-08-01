@@ -311,17 +311,16 @@ export class PostgresDbHandler extends BaseDbHandler {
     return await this.client.query(query, params);
   }
 
-  async healthCheck(): Promise<boolean> {
+  async healthCheck(): Promise<void> {
     if (!this.client) {
       throw new Error('Database client not initialized');
     }
 
     try {
       await this.client.query('SELECT 1');
-      return true;
     } catch (error) {
       console.error('Database health check failed:', error);
-      return false;
+      throw error;
     }
   }
 }

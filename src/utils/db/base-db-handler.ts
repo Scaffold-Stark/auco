@@ -41,5 +41,5 @@ export abstract class BaseDbHandler {
 
   abstract cleanup(): Promise<void>;
 
-  abstract healthCheck(): Promise<boolean>;
+  abstract healthCheck(): Promise<void>;
 }
