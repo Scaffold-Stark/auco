@@ -17,6 +17,11 @@ export type ProgressUiState = {
   eta: number; // seconds
   mode: 'historical' | 'live' | 'realtime';
   events: ProgressEventStat[];
+  health: {
+    database: boolean;
+    ws: boolean;
+    rpc: boolean;
+  };
 };
 
 const buildProgressBar = (current: number, end: number, width = 40): string => {
@@ -142,6 +147,23 @@ export function renderProgressUi(state: ProgressUiState): string[] {
   }
   lines.push(progressText);
   lines.push('');
+
+  lines.push('');
+  lines.push(pc.bold('Health'));
+  lines.push('');
+  lines.push(
+    '│ Database │ ' +
+      (state.health.database ? pc.greenBright('✓') : pc.redBright('✗')) +
+      ' │\n' +
+      '│ WS       │ ' +
+      (state.health.ws ? pc.greenBright('✓') : pc.redBright('✗')) +
+      ' │\n' +
+      '│ RPC      │ ' +
+      (state.health.rpc ? pc.greenBright('✓') : pc.redBright('✗')) +
+      ' │'
+  );
+  lines.push('');
+
   return lines;
 }
 

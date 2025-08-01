@@ -8,6 +8,11 @@ export class ProgressStats {
     lastBlock: 0,
     eventStats: {} as Record<string, { count: number }>,
     blocksProcessed: 0,
+    health: {
+      database: true,
+      ws: true,
+      rpc: true,
+    },
   };
   private eventContractMap: Record<string, string> = {};
   private rpcRequestCount = 0;
@@ -22,6 +27,11 @@ export class ProgressStats {
       lastBlock: fromBlock - 1,
       eventStats: {},
       blocksProcessed: 0,
+      health: {
+        database: true,
+        ws: true,
+        rpc: true,
+      },
     };
   }
 
@@ -41,6 +51,10 @@ export class ProgressStats {
     statsObj[key].count += 1;
     this.syncStats.lastBlock = blockNumber;
     this.syncStats.blocksProcessed += 1;
+  }
+
+  updateHealth(health: { database: boolean; ws: boolean; rpc: boolean }) {
+    this.syncStats.health = health;
   }
 
   incrementRpcRequest() {
@@ -66,7 +80,7 @@ export class ProgressStats {
 
   getUiState(): ProgressUiState {
     this.updateRpsWindow();
-    const { startBlock, endBlock, startTime, lastBlock, eventStats, blocksProcessed } =
+    const { startBlock, endBlock, startTime, lastBlock, eventStats, blocksProcessed, health } =
       this.syncStats;
     const totalBlocks = endBlock - startBlock + 1;
     const processedBlocks = lastBlock - startBlock + 1;
@@ -79,7 +93,7 @@ export class ProgressStats {
       const [eventName, contractAddress] = key.split('|');
       let formattedAddress = '';
       if (contractAddress && contractAddress.length > 20) {
-        formattedAddress = `${contractAddress.slice(0,7)}...${contractAddress.slice(-6)}`;
+        formattedAddress = `${contractAddress.slice(0, 7)}...${contractAddress.slice(-6)}`;
       } else {
         formattedAddress = contractAddress || '';
       }
@@ -90,6 +104,7 @@ export class ProgressStats {
         contractAddress: formattedAddress,
       };
     });
+
     return {
       chain: 'starknet',
       status: percent < 1 ? 'historical' : 'live',
@@ -99,6 +114,7 @@ export class ProgressStats {
       eta,
       mode: percent < 1 ? 'historical' : 'live',
       events,
+      health,
     };
   }
 }
