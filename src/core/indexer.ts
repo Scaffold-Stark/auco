@@ -239,12 +239,8 @@ export class StarknetIndexer {
     }
 
     try {
-      await this.dbHandler.beginTransaction();
-      const result = await fn();
-      await this.dbHandler.commitTransaction();
-      return result;
+      return await this.dbHandler.withTransaction(fn);
     } catch (error) {
-      await this.dbHandler.rollbackTransaction();
       this.logger.error(`${operation} failed:`, { ...context, error });
       return undefined;
     }
