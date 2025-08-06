@@ -3,7 +3,7 @@ module.exports = {
   rootDir: './src',
   testMatch: ['**/__tests__/**/*.(t|j)s', '**/*.(test|spec).(t|j)s'],
   transform: {
-    '^.+\\.(t|j)s$': 'ts-jest',
+    '^.+\\.ts$': 'ts-jest',
   },
   collectCoverageFrom: ['**/*.(t|j)s'],
   coverageDirectory: './coverage',
@@ -12,4 +12,8 @@ module.exports = {
     '^src/(.*)$': '<rootDir>/../src/$1',
   },
   maxWorkers: 1,
+  transformIgnorePatterns: [
+    'node_modules/(?!(terminal-size|ansi-escapes)/)',
+  ],
+  setupFilesAfterEnv: ['<rootDir>/../jest.setup.js'],
 };

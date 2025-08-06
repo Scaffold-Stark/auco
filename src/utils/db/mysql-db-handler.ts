@@ -289,6 +289,17 @@ export class MysqlDbHandler extends BaseDbHandler {
     await this.execute(`DELETE FROM events WHERE block_number = ?`, [blockNumber]);
   }
 
+  async withTransaction<T>(fn: () => Promise<T>): Promise<T> {
+    try {
+      await this.beginTransaction();
+      const result = await fn();
+      await this.commitTransaction();
+      return result;
+    } catch (error) {
+      await this.rollbackTransaction();
+      throw error;
+    }
+  }
   async beginTransaction(): Promise<void> {
     if (!this.connection) {
       throw new Error('Database connection not initialized');
