@@ -281,11 +281,10 @@ export class SqliteDbHandler extends BaseDbHandler {
       }
 
       this.db.exec('COMMIT');
+      this.inTransaction = false;
     } catch (error) {
       console.error('Error committing transaction:', error);
       throw error;
-    } finally {
-      this.inTransaction = false;
     }
   }
 
