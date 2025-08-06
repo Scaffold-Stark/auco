@@ -29,11 +29,7 @@ export abstract class BaseDbHandler {
 
   abstract deleteEventsByBlockNumber(blockNumber: number): Promise<void>;
 
-  abstract beginTransaction(): Promise<void>;
-
-  abstract commitTransaction(): Promise<void>;
-
-  abstract rollbackTransaction(): Promise<void>;
+  abstract withTransaction<T>(fn: () => Promise<T>): Promise<T>;
 
   abstract insertEvent(eventData: EventData): Promise<void>;
 

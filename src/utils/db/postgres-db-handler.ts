@@ -257,6 +257,18 @@ export class PostgresDbHandler extends BaseDbHandler {
     await this.client.query(`DELETE FROM events WHERE block_number = $1`, [blockNumber]);
   }
 
+  async withTransaction<T>(fn: () => Promise<T>): Promise<T> {
+    try {
+      await this.beginTransaction();
+      const result = await fn();
+      await this.commitTransaction();
+      return result;
+    } catch (error) {
+      await this.rollbackTransaction();
+      throw error;
+    }
+  }
+
   // Transaction management
   async beginTransaction(): Promise<void> {
     if (!this.client) {

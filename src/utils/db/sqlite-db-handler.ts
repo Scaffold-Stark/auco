@@ -250,6 +250,11 @@ export class SqliteDbHandler extends BaseDbHandler {
     stmt.run(blockNumber);
   }
 
+  async withTransaction<T>(fn: () => Promise<T>): Promise<T> {
+    const transactionFn = this.db.transaction(fn);
+    return await transactionFn();
+  }
+
   // Transaction management
   async beginTransaction(): Promise<void> {
     try {
