@@ -9,7 +9,6 @@ import { BaseDbHandler } from './base-db-handler';
 
 export class SqliteDbHandler extends BaseDbHandler {
   private db: Database.Database;
-  private inTransaction = false;
 
   constructor(private config: SqliteDbHandlerConfig) {
     super();
@@ -165,7 +164,7 @@ export class SqliteDbHandler extends BaseDbHandler {
       is_canonical = 1
     `);
 
-    const transaction = this.db.transaction((blocks: BlockData[]) => {
+    await this.withTransaction(async () => {
       for (const block of blocks) {
         const timestamp =
           typeof block.timestamp === 'number'
@@ -174,8 +173,6 @@ export class SqliteDbHandler extends BaseDbHandler {
         stmt.run(block.block_number, block.block_hash, block.parent_hash, timestamp);
       }
     });
-
-    transaction(blocks);
   }
 
   async checkIsBlockProcessed(blockNumber: number): Promise<boolean> {
@@ -251,63 +248,66 @@ export class SqliteDbHandler extends BaseDbHandler {
   }
 
   async withTransaction<T>(fn: () => Promise<T>): Promise<T> {
-    const transactionFn = this.db.transaction(fn);
-    return await transactionFn();
-  }
+    if (!this.db) {
+      throw new Error('Database not initialized');
+    }
 
-  // Transaction management
-  async beginTransaction(): Promise<void> {
+    // Check if we're already in a transaction using better-sqlite3's built-in property
+    const inTransaction = this.db.inTransaction;
+
+    if (inTransaction) {
+      // If already in transaction, just execute the function without starting a new one
+      // This allows for nested transaction calls while maintaining safety
+      return await fn();
+    }
+
+    // Start new transaction with immediate mode for better concurrency control
+    this.db.exec('BEGIN IMMEDIATE');
+
     try {
-      if (!this.db) {
-        throw new Error('Database not initialized');
-      }
-
-      if (this.inTransaction) {
-        throw new Error('Transaction already in progress');
-      }
-
-      this.db.exec('BEGIN TRANSACTION');
-      this.inTransaction = true;
+      const result = await fn();
+      this.db.exec('COMMIT');
+      return result;
     } catch (error) {
-      console.error('Error beginning transaction:', error);
-      this.inTransaction = false;
+      try {
+        this.db.exec('ROLLBACK');
+      } catch (rollbackError) {
+        // If rollback fails, the transaction was likely already rolled back
+        // Log the error but don't throw it to avoid masking the original error
+        console.warn(
+          'Rollback failed (transaction may have already been rolled back):',
+          rollbackError
+        );
+      }
       throw error;
     }
+  }
+
+  // Transaction management - these methods are kept for compatibility
+  // but should use withTransaction() for proper async handling
+  async beginTransaction(): Promise<void> {
+    if (!this.db) {
+      throw new Error('Database not initialized');
+    }
+    this.db.exec('BEGIN IMMEDIATE');
   }
 
   async commitTransaction(): Promise<void> {
-    try {
-      if (!this.db) {
-        throw new Error('Database not initialized');
-      }
-
-      if (!this.inTransaction) {
-        throw new Error('No transaction in progress');
-      }
-
-      this.db.exec('COMMIT');
-      this.inTransaction = false;
-    } catch (error) {
-      console.error('Error committing transaction:', error);
-      throw error;
+    if (!this.db) {
+      throw new Error('Database not initialized');
     }
+    this.db.exec('COMMIT');
   }
 
   async rollbackTransaction(): Promise<void> {
+    if (!this.db) {
+      throw new Error('Database not initialized');
+    }
     try {
-      if (!this.db) {
-        throw new Error('Database not initialized');
-      }
-
-      if (!this.inTransaction) {
-        throw new Error('No transaction in progress');
-      }
-
       this.db.exec('ROLLBACK');
-      this.inTransaction = false;
     } catch (error) {
-      console.error('Error rolling back transaction:', error);
-      throw error;
+      // Rollback might fail if no transaction is active, which is fine
+      console.warn('Rollback warning (may be expected):', error);
     }
   }
 
