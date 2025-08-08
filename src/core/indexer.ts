@@ -402,7 +402,9 @@ export class StarknetIndexer {
       throw error;
     }
 
-    this.startProgressUiLoop();
+    if (this.config.enableUiProgress) {
+      this.startProgressUiLoop();
+    }
 
     if (targetBlock < currentBlock && this.provider) {
       this.isProcessingHistoricalBlocks = true;
