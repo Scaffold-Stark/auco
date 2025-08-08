@@ -548,7 +548,7 @@ export class StarknetIndexer {
   }
 
   public async healthCheck(): Promise<{ database: boolean; ws: boolean; rpc: boolean }> {
-    this.logger.info('Checking health...');
+    this.logger.debug('Checking health...');
 
     let databaseHealthy = true;
     let wsHealthy = true;
@@ -642,46 +642,30 @@ export class StarknetIndexer {
       return;
     }
 
+    let continuationToken;
     let allEvents: EmittedEvent[] = [];
-    let continuationToken: string | undefined;
 
-    // Group event selectors by contract address
-    const contractEventSelectors = new Map<string, Set<string>>();
+    const eventSelectors: string[] = [];
 
     for (const [handlerKey] of this.eventHandlers.entries()) {
       if (handlerKey.includes(':')) {
-        const [contractAddress, eventSelector] = handlerKey.split(':');
-        if (!contractEventSelectors.has(contractAddress)) {
-          contractEventSelectors.set(contractAddress, new Set());
-        }
-        contractEventSelectors.get(contractAddress)!.add(eventSelector);
+        const [_, eventSelector] = handlerKey.split(':');
+        eventSelectors.push(eventSelector);
       }
     }
 
-    for (const contractAddress of this.contractAddresses) {
-      const eventSelectors = contractEventSelectors.get(contractAddress);
-      const keys =
-        eventSelectors && eventSelectors.size > 0 ? [Array.from(eventSelectors)] : undefined;
+    do {
+      const response = await this.provider.getEvents({
+        from_block: { block_number: fromBlock },
+        to_block: { block_number: toBlock },
+        keys: eventSelectors.length > 0 ? [eventSelectors] : [],
+        chunk_size: 1000,
+        continuation_token: continuationToken,
+      });
 
-      if (keys === undefined) {
-        continue;
-      }
-
-      do {
-        this.progressStats.incrementRpcRequest();
-        const response = await this.provider.getEvents({
-          from_block: { block_number: fromBlock },
-          to_block: { block_number: toBlock },
-          address: contractAddress,
-          keys: keys && keys.length > 0 ? keys : undefined,
-          chunk_size: 1000,
-          continuation_token: continuationToken,
-        });
-
-        allEvents = [...allEvents, ...response.events];
-        continuationToken = response.continuation_token;
-      } while (continuationToken);
-    }
+      allEvents = [...allEvents, ...response.events];
+      continuationToken = response.continuation_token;
+    } while (continuationToken);
 
     return allEvents;
   }
