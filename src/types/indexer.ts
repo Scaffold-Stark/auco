@@ -107,6 +107,9 @@ export interface IndexerConfig {
    * but may increase load on the node and database.
    */
   maxHistoricalBlockConcurrentRequests?: number;
+
+  /** Enable UI progress bar for tracking indexer progress */
+  enableUiProgress?: boolean;
 }
 
 export type StarknetEvent<TAbi extends Abi, TEventName extends string> = {
