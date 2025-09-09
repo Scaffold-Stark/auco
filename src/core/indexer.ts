@@ -382,7 +382,7 @@ export class StarknetIndexer {
     let targetBlock: number;
     if (this.hasExistingState && this.cursor) {
       // Resume from the block after the last processed block
-      targetBlock = this.cursor.blockNumber + 1;
+      targetBlock = this.cursor.blockNumber;
     } else {
       // Fresh start: honor configured starting block (or latest)
       if (this.config.startingBlockNumber === 'latest') {
