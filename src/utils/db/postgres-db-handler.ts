@@ -100,7 +100,7 @@ export class PostgresDbHandler extends BaseDbHandler {
     }
 
     return {
-      last_block_number: result.rows[0].last_block_number,
+      last_block_number: Number(result.rows[0].last_block_number),
       last_block_hash: result.rows[0].last_block_hash,
       cursor_key: cursorKey,
     };
