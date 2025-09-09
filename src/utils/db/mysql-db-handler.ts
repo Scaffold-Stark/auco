@@ -129,7 +129,7 @@ export class MysqlDbHandler extends BaseDbHandler {
     }
 
     return {
-      last_block_number: results[0].last_block_number,
+      last_block_number: Number(results[0].last_block_number),
       last_block_hash: results[0].last_block_hash,
       cursor_key: cursorKey,
     };

@@ -66,6 +66,7 @@ export class StarknetIndexer {
 
   private progressStats: ProgressStats;
   private progressUiShutdown?: () => void;
+  private hasExistingState: boolean = false;
 
   constructor(private config: IndexerConfig) {
     this.logger = config.logger || new ConsoleLogger(config.logLevel);
@@ -268,6 +269,7 @@ export class StarknetIndexer {
       const result = await this.dbHandler.getIndexerState(this.config.cursorKey);
 
       if (!result) {
+        this.hasExistingState = false;
         let startingBlock: number;
         if (this.config.startingBlockNumber === 'latest') {
           if (!this.provider) throw new Error('Provider not initialized');
@@ -280,6 +282,7 @@ export class StarknetIndexer {
         await this.dbHandler.initializeIndexerState(startingBlock, this.config.cursorKey);
         return startingBlock;
       } else {
+        this.hasExistingState = true;
         this.cursor = {
           blockNumber: result.last_block_number,
           blockHash: result.last_block_hash,
@@ -377,10 +380,16 @@ export class StarknetIndexer {
       currentBlock = await this.provider.getBlockNumber();
     }
     let targetBlock: number;
-    if (this.config.startingBlockNumber === 'latest') {
-      targetBlock = currentBlock;
+    if (this.hasExistingState && this.cursor) {
+      // Resume from the block after the last processed block
+      targetBlock = this.cursor.blockNumber + 1;
     } else {
-      targetBlock = this.config.startingBlockNumber;
+      // Fresh start: honor configured starting block (or latest)
+      if (this.config.startingBlockNumber === 'latest') {
+        targetBlock = currentBlock;
+      } else {
+        targetBlock = this.config.startingBlockNumber;
+      }
     }
 
     try {
