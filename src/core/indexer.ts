@@ -452,7 +452,11 @@ export class StarknetIndexer {
           this.logger.info(`Successfully processed block #${blockData.block_number}`);
 
           if (this.provider) {
-            await this.processBlockEvents(blockData.block_number, blockData.block_number);
+            await this.processBlockEvents(
+              blockData.block_number,
+              blockData.block_number,
+              blockData.block_hash
+            );
           }
 
           if (this.failedBlocks.length > 0 && this.failedBlocks.includes(blockData.block_number)) {
@@ -644,7 +648,7 @@ export class StarknetIndexer {
     }
   }
 
-  private async fetchEvents(
+  private async fetchEventsByRange(
     fromBlock: number,
     toBlock: number
   ): Promise<EmittedEvent[] | undefined> {
@@ -666,14 +670,49 @@ export class StarknetIndexer {
     }
 
     do {
-      const response = await this.provider.getEvents({
+      const request = {
         from_block: { block_number: fromBlock },
         to_block: { block_number: toBlock },
         keys: eventSelectors.length > 0 ? [eventSelectors] : [],
         chunk_size: 1000,
         continuation_token: continuationToken,
-      });
+      } as const;
 
+      const response = await this.provider.getEvents(request);
+      allEvents = [...allEvents, ...response.events];
+      continuationToken = response.continuation_token;
+    } while (continuationToken);
+
+    return allEvents;
+  }
+
+  private async fetchEventsByBlockHash(blockHash: string): Promise<EmittedEvent[] | undefined> {
+    if (!this.provider || !this.contractAddresses) {
+      this.logger.error('No provider or contract addresses found');
+      return;
+    }
+
+    let continuationToken;
+    let allEvents: EmittedEvent[] = [];
+
+    const eventSelectors: string[] = [];
+
+    for (const [handlerKey] of this.eventHandlers.entries()) {
+      if (handlerKey.includes(':')) {
+        const [_, eventSelector] = handlerKey.split(':');
+        eventSelectors.push(eventSelector);
+      }
+    }
+
+    do {
+      const request = {
+        from_block: { block_hash: blockHash },
+        keys: eventSelectors.length > 0 ? [eventSelectors] : [],
+        chunk_size: 1000,
+        continuation_token: continuationToken,
+      } as const;
+
+      const response = await this.provider.getEvents(request);
       allEvents = [...allEvents, ...response.events];
       continuationToken = response.continuation_token;
     } while (continuationToken);
@@ -772,7 +811,7 @@ export class StarknetIndexer {
     }
   }
 
-  private async processBlockEvents(fromBlock: number, toBlock: number) {
+  private async processBlockEvents(fromBlock: number, toBlock: number, blockHash?: string) {
     if (!this.provider) {
       this.logger.error('No RPC provider available to fetch ABI');
       return;
@@ -786,10 +825,9 @@ export class StarknetIndexer {
       const blockEvents = await this.withExponentialBackoff(
         `Fetch events for blocks ${fromBlock} to ${toBlock}`,
         async () => {
-          const events = await this.fetchEvents(fromBlock, toBlock);
-          if (!events || events.length === 0) {
-            throw new Error(`No events returned for blocks ${fromBlock} to ${toBlock}`);
-          }
+          const events = blockHash
+            ? await this.fetchEventsByBlockHash(blockHash)
+            : await this.fetchEventsByRange(fromBlock, toBlock);
           return events;
         }
       );
