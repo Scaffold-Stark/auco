@@ -7,6 +7,8 @@
 
 A TypeScript/Node.js indexer for Starknet events, supporting PostgreSQL, SQLite, and real-time event handling via WebSocket and RPC.
 
+Read [our documentation](https://scaffoldstark.com/auco)
+
 ## Features
 
 - 🔄 **Real-time Event Indexing**: Listen to Starknet events from specified contracts
