@@ -151,6 +151,11 @@ export class StarknetIndexer {
       this.newHeadsSubscription = await this.wsChannel.subscribeNewHeads();
 
       this.newHeadsSubscription.on(async (data) => {
+        // Skip processing if indexer has been stopped
+        if (!this.started) {
+          return;
+        }
+
         await this.withErrorHandling(
           'Processing new head',
           async () => {
@@ -551,6 +556,34 @@ export class StarknetIndexer {
       this.retryTimeout = undefined;
     }
     this.stopProgressUiLoop();
+
+    // Unsubscribe from new heads subscription to stop event processing
+    if (this.newHeadsSubscription) {
+      this.logger.info('[WebSocket] Unsubscribing from new heads...');
+      try {
+        if (!this.newHeadsSubscription.isClosed) {
+          await this.newHeadsSubscription.unsubscribe();
+        }
+        this.logger.info('[WebSocket] Successfully unsubscribed from new heads');
+      } catch (error: any) {
+        // Error code 66 means "Invalid subscription id" - subscription already closed on server
+        const isAlreadyClosed =
+          error?.message?.includes('code":66') || error?.message?.includes('Invalid subscription');
+        if (isAlreadyClosed) {
+          this.logger.debug('[WebSocket] Subscription already closed on server');
+        } else {
+          this.logger.error('[WebSocket] Error unsubscribing from new heads:', error);
+        }
+      }
+    }
+    this.newHeadsSubscription = undefined;
+
+    // Close WebSocket connection
+    if (this.wsChannel.isConnected()) {
+      this.logger.info('[WebSocket] Closing connection...');
+      this.wsChannel.disconnect();
+      this.logger.info('[WebSocket] Connection closed');
+    }
 
     // Close persistent database connection
     if (this.dbHandler.isConnected()) {
