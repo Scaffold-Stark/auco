@@ -49,6 +49,49 @@ describe('StarknetIndexer', () => {
     expect(indexer).toBeInstanceOf(StarknetIndexer);
   });
 
+  it('should resolve start block from contract address nonce lookup', async () => {
+    const contractAddress = '0x4718f5a0fc34cc1af16a1cdee98ffb20c31f5cd61d6ab07201858f4287c938d';
+    const mockDbHandler = {
+      isConnected: jest.fn().mockReturnValue(true),
+      connect: jest.fn().mockResolvedValue(undefined),
+      disconnect: jest.fn().mockResolvedValue(undefined),
+      initializeDb: jest.fn().mockResolvedValue(undefined),
+      getIndexerState: jest.fn().mockResolvedValue(null),
+      initializeIndexerState: jest.fn().mockResolvedValue(undefined),
+    };
+
+    const mockProvider = {
+      getBlockNumber: jest.fn().mockResolvedValue(100),
+      getNonceForAddress: jest.fn().mockImplementation((_address: string, block: any) => {
+        if (block.block_number < 42) {
+          throw new Error('Contract not found');
+        }
+        return '0x1';
+      }),
+    };
+
+    const indexer = new StarknetIndexer({
+      rpcNodeUrl: 'http://localhost:9944',
+      wsNodeUrl: 'ws://localhost:9945',
+      database: {
+        type: 'sqlite',
+        config: { dbInstance: new Database('./memory.db') },
+      },
+      contractAddresses: [contractAddress],
+    });
+
+    (indexer as any).dbHandler = mockDbHandler;
+    (indexer as any).provider = mockProvider;
+
+    const startBlock = await indexer.initializeDatabase();
+
+    expect(startBlock).toBe(42);
+    expect(mockProvider.getBlockNumber).toHaveBeenCalled();
+    expect(mockProvider.getNonceForAddress).toHaveBeenCalledWith(contractAddress, {
+      block_number: 42,
+    });
+  });
+
   it('should throw error if onEvent is called without contractAddress', async () => {
     const indexer = new StarknetIndexer({
       rpcNodeUrl: 'http://localhost:9944',

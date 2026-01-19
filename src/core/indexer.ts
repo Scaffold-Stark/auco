@@ -10,7 +10,11 @@ import {
   Subscription,
 } from 'starknet';
 
-import { groupConsecutiveBlocks, parallelMap } from '../utils/blockUtils';
+import {
+  findContractDeploymentBlock,
+  groupConsecutiveBlocks,
+  parallelMap,
+} from '../utils/blockUtils';
 import {
   EventHandlerConfig,
   BaseEventHandlerConfig,
@@ -247,6 +251,44 @@ export class StarknetIndexer {
     }
   }
 
+  private async findContractDeploymentBlock(contractAddresses: string[]): Promise<number> {
+    if (!this.provider) {
+      throw new Error('Provider not initialized');
+    }
+
+    if (contractAddresses.length > 0) {
+      this.logger.info(
+        `Resolving starting block from ${contractAddresses.length} contract address(es)`
+      );
+      this.progressStats.incrementRpcRequest();
+      let earliestDeploymentBlock: number | null = null;
+      for (const contractAddress of this.contractAddresses) {
+        this.logger.debug(`Finding deployment block for contract ${contractAddress}`);
+        const startTime = Date.now();
+        const deploymentBlock = await findContractDeploymentBlock(this.provider, contractAddress, {
+          onRpcRequest: () => this.progressStats.incrementRpcRequest(),
+        });
+        const duration = Date.now() - startTime;
+        this.logger.debug(
+          `Resolved deployment block for ${contractAddress} to ${deploymentBlock} (took ${duration}ms)`
+        );
+        if (earliestDeploymentBlock === null || deploymentBlock < earliestDeploymentBlock) {
+          earliestDeploymentBlock = deploymentBlock;
+        }
+      }
+
+      if (earliestDeploymentBlock !== null) {
+        this.logger.info(`Resolved earliest deployment block: ${earliestDeploymentBlock}`);
+        return earliestDeploymentBlock;
+      }
+    }
+
+    this.logger.info('No contract deployment block found; using latest block');
+    this.progressStats.incrementRpcRequest();
+    const latestBlock = await this.provider.getBlockNumber();
+    return latestBlock;
+  }
+
   // Initialize the database schema
   public async initializeDatabase(): Promise<number | undefined> {
     const shouldRelease = !this.dbHandler.isConnected();
@@ -270,14 +312,9 @@ export class StarknetIndexer {
 
       if (!result) {
         this.hasExistingState = false;
-        let startingBlock: number;
-        if (this.config.startingBlockNumber === 'latest') {
-          if (!this.provider) throw new Error('Provider not initialized');
-          this.progressStats.incrementRpcRequest();
-          startingBlock = await this.provider.getBlockNumber();
-        } else {
-          startingBlock = this.config.startingBlockNumber;
-        }
+        const startingBlock = await this.findContractDeploymentBlock(
+          Array.from(this.contractAddresses)
+        );
         this.cursor = { blockNumber: startingBlock, blockHash: '' };
         await this.dbHandler.initializeIndexerState(startingBlock, this.config.cursorKey);
         return startingBlock;
@@ -387,8 +424,12 @@ export class StarknetIndexer {
       // Fresh start: honor configured starting block (or latest)
       if (this.config.startingBlockNumber === 'latest') {
         targetBlock = currentBlock;
-      } else {
+      } else if (typeof this.config.startingBlockNumber === 'number') {
         targetBlock = this.config.startingBlockNumber;
+      } else if (this.contractAddresses.size > 0) {
+        targetBlock = await this.findContractDeploymentBlock(Array.from(this.contractAddresses));
+      } else {
+        targetBlock = currentBlock;
       }
     }
 

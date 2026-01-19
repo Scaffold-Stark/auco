@@ -83,7 +83,7 @@ export interface IndexerConfig {
   database: DatabaseConfig;
 
   /** Block number to start indexing from, or 'latest' to start from current block */
-  startingBlockNumber: number | 'latest';
+  startingBlockNumber?: number | 'latest';
 
   /** Optional array of contract addresses to monitor for events */
   contractAddresses?: string[];
