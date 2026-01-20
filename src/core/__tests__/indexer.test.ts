@@ -527,7 +527,12 @@ describe('StarknetIndexer', () => {
         isConnected: jest.fn().mockReturnValue(true),
         on: jest.fn(),
         waitForConnection: jest.fn().mockResolvedValue(undefined),
-        subscribeNewHeads: jest.fn().mockResolvedValue({ on: jest.fn() }),
+        subscribeNewHeads: jest.fn().mockResolvedValue({
+          on: jest.fn(),
+          isClosed: false,
+          unsubscribe: jest.fn().mockResolvedValue(true),
+        }),
+        disconnect: jest.fn(),
       };
 
       mockIndexer = new StarknetIndexer({
@@ -929,8 +934,13 @@ describe('StarknetIndexer', () => {
       mockWsChannel = {
         on: jest.fn(),
         waitForConnection: jest.fn().mockResolvedValue(undefined),
-        subscribeNewHeads: jest.fn().mockResolvedValue({ on: jest.fn() }),
+        subscribeNewHeads: jest.fn().mockResolvedValue({
+          on: jest.fn(),
+          isClosed: false,
+          unsubscribe: jest.fn().mockResolvedValue(true),
+        }),
         isConnected: jest.fn().mockReturnValue(true),
+        disconnect: jest.fn(),
       };
 
       mockIndexer = new StarknetIndexer({
