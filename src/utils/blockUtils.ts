@@ -62,11 +62,9 @@ export async function findContractDeploymentBlock(
     try {
       options.onRpcRequest?.();
       await provider.getNonceForAddress(contractAddress, mid);
-      console.log(`Found deployment block for ${contractAddress} at ${mid}`);
       foundBlock = mid;
       high = mid - 1;
     } catch (_error) {
-      console.log(`No deployment block found for ${contractAddress} at ${mid}`, _error);
       low = mid + 1;
     }
   }
