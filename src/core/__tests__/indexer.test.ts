@@ -25,6 +25,7 @@ jest.mock('starknet', () => {
         on: jest.fn(),
       }),
       isConnected: jest.fn().mockReturnValue(true),
+      disconnect: jest.fn(),
     })),
   };
 });
