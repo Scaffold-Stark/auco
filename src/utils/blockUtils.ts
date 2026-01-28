@@ -1,3 +1,5 @@
+import { BlockNumber, RpcProvider } from 'starknet';
+
 type BlockRange = { from: number; to: number };
 
 export const groupConsecutiveBlocks = (blocks: number[]): BlockRange[] => {
@@ -38,4 +40,38 @@ export async function parallelMap<T, R>(
   }
   await Promise.all(Array(concurrency).fill(0).map(worker));
   return results;
+}
+
+type FindDeploymentOptions = {
+  onRpcRequest?: () => void;
+};
+
+export async function findContractDeploymentBlock(
+  provider: RpcProvider,
+  contractAddress: string,
+  options: FindDeploymentOptions = {}
+): Promise<number> {
+  let low = 0;
+  let high = await provider.getBlockNumber();
+
+  let foundBlock: number | null = null;
+
+  while (low <= high) {
+    const mid = Math.floor((low + high) / 2);
+
+    try {
+      options.onRpcRequest?.();
+      await provider.getNonceForAddress(contractAddress, mid);
+      foundBlock = mid;
+      high = mid - 1;
+    } catch (_error) {
+      low = mid + 1;
+    }
+  }
+
+  if (foundBlock === null) {
+    throw new Error(`Unable to find deployment block for contract ${contractAddress}`);
+  }
+
+  return foundBlock;
 }

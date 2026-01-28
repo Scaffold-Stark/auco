@@ -13,6 +13,23 @@ jest.mock('../../ui/patch', () => ({
   patchWriteStreams: jest.fn(),
 }));
 
+// Mock WebSocketChannel to prevent WebSocket initialization errors
+jest.mock('starknet', () => {
+  const actual = jest.requireActual('starknet');
+  return {
+    ...actual,
+    WebSocketChannel: jest.fn().mockImplementation(() => ({
+      on: jest.fn(),
+      waitForConnection: jest.fn().mockResolvedValue(undefined),
+      subscribeNewHeads: jest.fn().mockResolvedValue({
+        on: jest.fn(),
+      }),
+      isConnected: jest.fn().mockReturnValue(true),
+      disconnect: jest.fn(),
+    })),
+  };
+});
+
 describe('StarknetIndexer', () => {
   // Global cleanup to ensure Jest exits properly
   afterAll(async () => {
@@ -47,6 +64,66 @@ describe('StarknetIndexer', () => {
       maxHistoricalBlockConcurrentRequests: 10,
     });
     expect(indexer).toBeInstanceOf(StarknetIndexer);
+  });
+
+  it('should resolve start block from contract address nonce lookup', async () => {
+    const contractAddress = '0x4718f5a0fc34cc1af16a1cdee98ffb20c31f5cd61d6ab07201858f4287c938d';
+    const normalizedAddress = contractAddress.toLowerCase();
+    const mockDbHandler = {
+      isConnected: jest.fn().mockReturnValue(true),
+      connect: jest.fn().mockResolvedValue(undefined),
+      disconnect: jest.fn().mockResolvedValue(undefined),
+      initializeDb: jest.fn().mockResolvedValue(undefined),
+      getIndexerState: jest.fn().mockResolvedValue(null),
+      initializeIndexerState: jest.fn().mockResolvedValue(undefined),
+    };
+
+    const mockProvider = {
+      getBlockNumber: jest.fn().mockResolvedValue(100),
+      getNonceForAddress: jest.fn().mockImplementation((_address: string, blockNumber: number) => {
+        if (blockNumber < 42) {
+          throw new Error('Contract not found');
+        }
+        return '0x1';
+      }),
+    };
+
+    const mockWsChannel = {
+      on: jest.fn(),
+      waitForConnection: jest.fn().mockResolvedValue(undefined),
+      subscribeNewHeads: jest.fn().mockResolvedValue({
+        on: jest.fn(),
+      }),
+      isConnected: jest.fn().mockReturnValue(true),
+    };
+
+    const indexer = new StarknetIndexer({
+      rpcNodeUrl: 'http://localhost:9944',
+      wsNodeUrl: 'ws://localhost:9945',
+      database: {
+        type: 'sqlite',
+        config: { dbInstance: new Database('./memory.db') },
+      },
+      contractAddresses: [contractAddress],
+    });
+
+    (indexer as any).dbHandler = mockDbHandler;
+    (indexer as any).provider = mockProvider;
+    (indexer as any).wsChannel = mockWsChannel;
+
+    const startBlock = await indexer.initializeDatabase();
+
+    expect(startBlock).toBe(42);
+    expect(mockProvider.getBlockNumber).toHaveBeenCalled();
+    // Verify that getNonceForAddress was called (binary search should eventually call block 42)
+    expect(mockProvider.getNonceForAddress).toHaveBeenCalled();
+    // Get the actual normalized address from the calls
+    const calls = (mockProvider.getNonceForAddress as jest.Mock).mock.calls;
+    const actualNormalizedAddress = calls[0][0];
+    // Verify that block 42 was called during the binary search
+    const block42Call = calls.find((call) => call[1] === 42);
+    expect(block42Call).toBeDefined();
+    expect(block42Call[0]).toBe(actualNormalizedAddress);
   });
 
   it('should throw error if onEvent is called without contractAddress', async () => {
