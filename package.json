@@ -58,6 +58,12 @@
     ]
   },
   "bin": {
-    "abi-downloader": "./dist/scripts/download-abi.js"
-  }
+    "create-auco": "./dist/scripts/create-auco.js",
+    "auco-download-abi": "./dist/scripts/download-abi.js"
+  },
+  "files": [
+    "dist",
+    "README.md",
+    "LICENSE"
+  ]
 }
