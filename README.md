@@ -23,7 +23,61 @@ Read [our documentation](https://scaffoldstark.com/auco)
 
 ## Installation
 
-### From npm (Recommended)
+### Create a New Project
+
+The quickest way to create a new Auco project is using the create command:
+
+```bash
+# Using npm (recommended - works once published)
+npm create auco
+
+# Using yarn
+yarn create auco
+
+# Using pnpm
+pnpm create auco
+
+# Using bun
+bun create auco
+
+# Using npx (also works once published)
+npx create-auco
+```
+
+On installation, you'll see a few prompts:
+- ✓ What's the name of your project? › my-starknet-indexer
+- ✓ Which template would you like to use? › Default
+- ✓ Installed packages
+- ✓ Initialized git repository
+
+You can skip prompts by using the `--yes` flag:
+```bash
+npm create auco my-project --yes
+# or
+npx create-auco my-project --yes
+```
+
+**For Local Development/Testing:**
+
+If you're developing the `create-auco` script locally, you can test it using:
+
+```bash
+# Option 1: Run directly from the built file
+node dist/scripts/create-auco.js my-project
+
+# Option 2: Link the package globally first, then use npx
+npm link
+npx create-auco my-project
+
+# Option 3: Use npm create with the local package
+npm create auco@file:.
+```
+
+**Note:** For `npm create auco` / `yarn create auco` to work for end users, the package needs to be published as `create-auco` on npm (in addition to the main `auco` package).
+
+### Install as a Library
+
+If you want to use Auco as a library in an existing project:
 
 ```bash
 npm install auco
