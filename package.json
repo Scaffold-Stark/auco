@@ -1,16 +1,17 @@
 {
-  "name": "auco",
-  "version": "0.1.7",
-  "main": "dist/index.js",
-  "types": "dist/index.d.ts",
+  "name": "auco-workspace",
+  "private": true,
+  "workspaces": [
+    "packages/*"
+  ],
   "scripts": {
     "chain": "starknet-devnet --state-archive-capacity full --seed 0",
-    "build": "tsc --skipLibCheck",
+    "build": "npm -ws run build --if-present",
+    "test": "npm -ws run test --if-present",
     "lint": "eslint . --ext .ts",
     "lint:fix": "eslint . --ext .ts --fix",
     "format": "prettier --write \"**/*.{ts,js,json,md}\"",
-    "postinstall": "npx patch-package",
-    "test": "jest --passWithNoTests --forceExit --config ./jest.config.js"
+    "postinstall": "npx patch-package"
   },
   "overrides": {
     "chalk": "4.1.2",
@@ -22,18 +23,8 @@
     "error-ex": "1.3.4",
     "has-ansi": "6.0.2"
   },
-  "dependencies": {
-    "commander": "^11.1.0",
-    "@types/better-sqlite3": "^7.6.13",
-    "abi-wan-kanabi": "2.2.4",
-    "better-sqlite3": "^12.2.0",
-    "mysql2": "^3.14.1",
-    "patch-package": "^8.0.0",
-    "pg": "^8.11.0",
-    "starknet": "7.6.2",
-    "terminal-size": "^4.0.0"
-  },
   "devDependencies": {
+    "patch-package": "^8.0.0",
     "@types/jest": "^29.5.3",
     "@types/pg": "^8.10.2",
     "@typescript-eslint/eslint-plugin": "^8.32.0",
@@ -56,14 +47,5 @@
     "*.{json,md}": [
       "prettier --write"
     ]
-  },
-  "bin": {
-    "create-auco": "./dist/scripts/create-auco.js",
-    "auco-download-abi": "./dist/scripts/download-abi.js"
-  },
-  "files": [
-    "dist",
-    "README.md",
-    "LICENSE"
-  ]
+  }
 }

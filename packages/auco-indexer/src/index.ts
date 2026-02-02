@@ -1,9 +1,8 @@
 export { StarknetIndexer } from './core/indexer';
 
-export {
-  LogLevel,
+export { LogLevel, ConsoleLogger } from './types/indexer';
+export type {
   Logger,
-  ConsoleLogger,
   IndexerConfig,
   StarknetEvent,
   EventHandler,
