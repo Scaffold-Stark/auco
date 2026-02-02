@@ -100,6 +100,16 @@ export class StarknetIndexer {
     this.MAX_HISTORICAL_BLOCK_CONCURRENT_REQUESTS =
       config.maxHistoricalBlockConcurrentRequests ?? 5;
 
+    // Warn if dev mode reset is enabled
+    if (config.devMode?.resetOnStart) {
+      this.logger.warn(
+        '⚠️  WARNING: Development mode reset is enabled! All indexed data (blocks, events, and cursor state) will be deleted on indexer start.'
+      );
+      this.logger.warn(
+        '⚠️  This should ONLY be used in development. Do NOT enable this in production!'
+      );
+    }
+
     this.setupEventHandlers();
   }
 
@@ -312,6 +322,16 @@ export class StarknetIndexer {
     try {
       // in blocks table, composite primary key with both number and hash
       await this.dbHandler.initializeDb();
+
+      // Reset indexer state if dev mode reset is enabled
+      if (this.config.devMode?.resetOnStart) {
+        this.logger.warn('🔄 Resetting indexer state (dev mode: resetOnStart enabled)...');
+        await this.dbHandler.resetIndexerState(this.config.cursorKey);
+        this.logger.info(
+          '✅ Indexer state reset complete. All blocks, events, and cursor state have been cleared.'
+        );
+        this.hasExistingState = false;
+      }
 
       const result = await this.dbHandler.getIndexerState(this.config.cursorKey);
 

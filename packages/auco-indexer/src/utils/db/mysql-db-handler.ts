@@ -366,4 +366,20 @@ export class MysqlDbHandler extends BaseDbHandler {
       throw error;
     }
   }
+
+  async resetIndexerState(cursorKey?: string): Promise<void> {
+    if (!this.connection) {
+      throw new Error('Database connection not initialized');
+    }
+
+    // Delete all blocks (events will be deleted via CASCADE)
+    await this.execute('DELETE FROM blocks');
+
+    // Delete indexer state for the given cursor key
+    if (cursorKey) {
+      await this.execute('DELETE FROM indexer_state WHERE cursor_key = ?', [cursorKey]);
+    } else {
+      await this.execute('DELETE FROM indexer_state');
+    }
+  }
 }
