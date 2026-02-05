@@ -94,7 +94,10 @@ async function downloadAbisFromFile(rpcUrl: string, contractsFile: string, outpu
 }
 
 // CLI setup
-program.name('abi-downloader').description('Download ABIs from Starknet contracts').version('1.0.0');
+program
+  .name('abi-downloader')
+  .description('Download ABIs from Starknet contracts')
+  .version('1.0.0');
 
 program
   .command('single')
