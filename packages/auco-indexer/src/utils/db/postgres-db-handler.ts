@@ -335,4 +335,20 @@ export class PostgresDbHandler extends BaseDbHandler {
       throw error;
     }
   }
+
+  async resetIndexerState(cursorKey?: string): Promise<void> {
+    if (!this.client) {
+      throw new Error('Database client not initialized');
+    }
+
+    // Delete all blocks (events will be deleted via CASCADE)
+    await this.client.query('DELETE FROM blocks');
+
+    // Delete indexer state for the given cursor key
+    if (cursorKey) {
+      await this.client.query('DELETE FROM indexer_state WHERE cursor_key = $1', [cursorKey]);
+    } else {
+      await this.client.query('DELETE FROM indexer_state');
+    }
+  }
 }
