@@ -1,0 +1,30 @@
+{
+  "name": "auco",
+  "version": "0.1.7",
+  "main": "dist/index.js",
+  "types": "dist/index.d.ts",
+  "scripts": {
+    "build": "tsc -p tsconfig.json --skipLibCheck",
+    "test": "jest --passWithNoTests --forceExit --config ./jest.config.js"
+  },
+  "dependencies": {
+    "@types/better-sqlite3": "^7.6.13",
+    "abi-wan-kanabi": "2.2.4",
+    "better-sqlite3": "^12.2.0",
+    "commander": "^11.1.0",
+    "mysql2": "^3.14.1",
+    "pg": "^8.11.0",
+    "starknet": "7.6.2",
+    "terminal-size": "^4.0.0"
+  },
+  "bin": {
+    "auco-download-abi": "./dist/scripts/download-abi.js"
+  },
+  "files": [
+    "dist",
+    "README.md",
+    "LICENSE"
+  ]
+}
+
+

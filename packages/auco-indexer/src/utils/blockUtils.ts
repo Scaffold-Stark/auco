@@ -1,4 +1,4 @@
-import { BlockNumber, RpcProvider } from 'starknet';
+import { RpcProvider } from 'starknet';
 
 type BlockRange = { from: number; to: number };
 

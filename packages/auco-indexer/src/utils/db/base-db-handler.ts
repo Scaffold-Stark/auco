@@ -38,4 +38,10 @@ export abstract class BaseDbHandler {
   abstract cleanup(): Promise<void>;
 
   abstract healthCheck(): Promise<void>;
+
+  /**
+   * Reset all indexer state by clearing blocks, events, and indexer state.
+   * WARNING: This will delete all indexed data!
+   */
+  abstract resetIndexerState(cursorKey?: string): Promise<void>;
 }

@@ -1,0 +1,22 @@
+{
+  "name": "create-auco",
+  "version": "0.1.7",
+  "bin": {
+    "create-auco": "./dist/create-auco.js"
+  },
+  "main": "dist/create-auco.js",
+  "types": "dist/create-auco.d.ts",
+  "scripts": {
+    "build": "tsc -p tsconfig.json --skipLibCheck"
+  },
+  "dependencies": {
+    "commander": "^11.1.0"
+  },
+  "files": [
+    "dist",
+    "README.md",
+    "LICENSE"
+  ]
+}
+
+
