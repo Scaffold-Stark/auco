@@ -5,7 +5,6 @@ describe('findContractDeploymentBlock', () => {
   // Use public Starknet Sepolia RPC endpoint for testing
   const provider = new RpcProvider({
     nodeUrl: 'https://starknet-sepolia-rpc.publicnode.com',
-    specVersion: '0.8.1',
   });
 
   // Well-known contract on Sepolia testnet

@@ -102,10 +102,16 @@ async function runReorgExample(): Promise<void> {
   });
 
   // Set up contract with first devnet account
-  const strkContract = new Contract(universalErc20Abi, CONFIG.CONTRACT_ADDRESS, provider);
-  strkContract.connect(
-    new Account(provider, CONFIG.DEVNET_ACCOUNT_1.ADDRESS, CONFIG.DEVNET_ACCOUNT_1.PRIVATE_KEY)
-  );
+  const account = new Account({
+    provider,
+    address: CONFIG.DEVNET_ACCOUNT_1.ADDRESS,
+    signer: CONFIG.DEVNET_ACCOUNT_1.PRIVATE_KEY,
+  });
+  const strkContract = new Contract({
+    abi: universalErc20Abi,
+    address: CONFIG.CONTRACT_ADDRESS,
+    providerOrAccount: account,
+  });
 
   // Perform initial transfers
   console.log('Performing initial transfers...');
