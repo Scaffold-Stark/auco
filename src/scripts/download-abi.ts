@@ -18,7 +18,6 @@ async function downloadAbi(options: DownloadAbiOptions) {
   // Initialize RPC provider
   const provider = new RpcProvider({
     nodeUrl: rpcUrl,
-    specVersion: '0.8.1',
   });
 
   try {

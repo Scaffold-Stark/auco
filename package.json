@@ -30,7 +30,7 @@
     "mysql2": "^3.14.1",
     "patch-package": "^8.0.0",
     "pg": "^8.11.0",
-    "starknet": "7.6.2",
+    "starknet": "9.3.0",
     "terminal-size": "^4.0.0"
   },
   "devDependencies": {
