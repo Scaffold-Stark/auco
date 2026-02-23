@@ -18,7 +18,6 @@ async function downloadAbi(options: DownloadAbiOptions) {
   // Initialize RPC provider
   const provider = new RpcProvider({
     nodeUrl: rpcUrl,
-    specVersion: '0.8.1',
   });
 
   try {
@@ -94,7 +93,10 @@ async function downloadAbisFromFile(rpcUrl: string, contractsFile: string, outpu
 }
 
 // CLI setup
-program.name('abi-downloader').description('Download ABIs from Starknet contracts').version('1.0.0');
+program
+  .name('abi-downloader')
+  .description('Download ABIs from Starknet contracts')
+  .version('1.0.0');
 
 program
   .command('single')

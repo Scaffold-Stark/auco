@@ -16,6 +16,9 @@ const indexer = new StarknetIndexer({
 
   logLevel: LogLevel.INFO,
   startingBlockNumber: 'latest',
+  devMode: {
+    resetOnStart: true,
+  }
 });
 
 indexer.onEvent({

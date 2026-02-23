@@ -110,6 +110,19 @@ export interface IndexerConfig {
 
   /** Enable UI progress bar for tracking indexer progress */
   enableUiProgress?: boolean;
+
+  /**
+   * Development mode options
+   * WARNING: These options are for development only and will clear all indexed data!
+   */
+  devMode?: {
+    /**
+     * If true, reset all indexed data (blocks, events, and cursor state) on indexer start.
+     * This is useful for development to quickly reset state without manually clearing the database.
+     * WARNING: This will delete all indexed data!
+     */
+    resetOnStart?: boolean;
+  };
 }
 
 export type StarknetEvent<TAbi extends Abi, TEventName extends string> = {

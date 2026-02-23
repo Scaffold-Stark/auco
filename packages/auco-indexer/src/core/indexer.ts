@@ -8,6 +8,7 @@ import {
   EmittedEvent,
   WebSocketChannel,
   Subscription,
+  createAbiParser,
 } from 'starknet';
 
 import {
@@ -91,7 +92,7 @@ export class StarknetIndexer {
     }
 
     try {
-      this.provider = new RpcProvider({ nodeUrl: config.rpcNodeUrl, specVersion: '0.8.1' });
+      this.provider = new RpcProvider({ nodeUrl: config.rpcNodeUrl });
     } catch (error) {
       this.logger.error('Failed to initialize RPC provider:', error);
     }
@@ -99,6 +100,16 @@ export class StarknetIndexer {
     // Set concurrency for historical block fetching (default: 5, configurable)
     this.MAX_HISTORICAL_BLOCK_CONCURRENT_REQUESTS =
       config.maxHistoricalBlockConcurrentRequests ?? 5;
+
+    // Warn if dev mode reset is enabled
+    if (config.devMode?.resetOnStart) {
+      this.logger.warn(
+        '⚠️  WARNING: Development mode reset is enabled! All indexed data (blocks, events, and cursor state) will be deleted on indexer start.'
+      );
+      this.logger.warn(
+        '⚠️  This should ONLY be used in development. Do NOT enable this in production!'
+      );
+    }
 
     this.setupEventHandlers();
   }
@@ -312,6 +323,16 @@ export class StarknetIndexer {
     try {
       // in blocks table, composite primary key with both number and hash
       await this.dbHandler.initializeDb();
+
+      // Reset indexer state if dev mode reset is enabled
+      if (this.config.devMode?.resetOnStart) {
+        this.logger.warn('🔄 Resetting indexer state (dev mode: resetOnStart enabled)...');
+        await this.dbHandler.resetIndexerState(this.config.cursorKey);
+        this.logger.info(
+          '✅ Indexer state reset complete. All blocks, events, and cursor state have been cleared.'
+        );
+        this.hasExistingState = false;
+      }
 
       const result = await this.dbHandler.getIndexerState(this.config.cursorKey);
 
@@ -926,6 +947,7 @@ export class StarknetIndexer {
           block_number: event.block_number,
           block_hash: event.block_hash || '',
           transaction_hash: event.transaction_hash,
+          transaction_index: event.transaction_index ?? 0,
           from_address: fromAddress,
           event_index: eventIndex,
           keys: event.keys,
@@ -954,8 +976,15 @@ export class StarknetIndexer {
               const abiEvents = events.getAbiEvents(abi);
               const abiStructs = CallData.getAbiStruct(abi);
               const abiEnums = CallData.getAbiEnum(abi);
+              const parser = createAbiParser(abi);
 
-              const parsedEvents = events.parseEvents([eventObj], abiEvents, abiStructs, abiEnums);
+              const parsedEvents = events.parseEvents(
+                [eventObj],
+                abiEvents,
+                abiStructs,
+                abiEnums,
+                parser
+              );
 
               if (parsedEvents && parsedEvents.length > 0) {
                 // Get the first key of the parsed event (the event name)
@@ -966,6 +995,7 @@ export class StarknetIndexer {
                   block_number: eventObj.block_number,
                   block_hash: eventObj.block_hash,
                   transaction_hash: eventObj.transaction_hash,
+                  transaction_index: eventObj.transaction_index,
                   from_address: fromAddress,
                   event_index: eventObj.event_index,
                   keys: eventObj.keys,
@@ -975,7 +1005,7 @@ export class StarknetIndexer {
                 parsedEvent = parsedEventWithOriginal;
                 // this.logger.debug(`Parsed event values:`, parsedValues);
                 const eventName = eventKey;
-                this.progressStats.updateEvent(event.block_number, eventName, fromAddress);
+                this.progressStats.updateEvent(event.block_number ?? 0, eventName, fromAddress);
               }
             } catch (error) {
               this.logger.error(`Error parsing event from contract ${fromAddress}:`, error);

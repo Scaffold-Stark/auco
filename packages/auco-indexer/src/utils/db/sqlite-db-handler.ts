@@ -374,4 +374,21 @@ export class SqliteDbHandler extends BaseDbHandler {
       throw error;
     }
   }
+
+  async resetIndexerState(cursorKey?: string): Promise<void> {
+    if (!this.db) {
+      throw new Error('Database not initialized');
+    }
+
+    // Delete all blocks (events will be deleted via CASCADE)
+    this.db.exec('DELETE FROM blocks');
+
+    // Delete indexer state for the given cursor key
+    if (cursorKey) {
+      const stmt = this.db.prepare('DELETE FROM indexer_state WHERE cursor_key = ?');
+      stmt.run(cursorKey);
+    } else {
+      this.db.exec('DELETE FROM indexer_state');
+    }
+  }
 }
