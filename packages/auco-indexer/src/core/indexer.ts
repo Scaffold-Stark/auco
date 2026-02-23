@@ -8,6 +8,7 @@ import {
   EmittedEvent,
   WebSocketChannel,
   Subscription,
+  createAbiParser,
 } from 'starknet';
 
 import {
@@ -91,7 +92,7 @@ export class StarknetIndexer {
     }
 
     try {
-      this.provider = new RpcProvider({ nodeUrl: config.rpcNodeUrl, specVersion: '0.8.1' });
+      this.provider = new RpcProvider({ nodeUrl: config.rpcNodeUrl });
     } catch (error) {
       this.logger.error('Failed to initialize RPC provider:', error);
     }
@@ -946,6 +947,7 @@ export class StarknetIndexer {
           block_number: event.block_number,
           block_hash: event.block_hash || '',
           transaction_hash: event.transaction_hash,
+          transaction_index: event.transaction_index ?? 0,
           from_address: fromAddress,
           event_index: eventIndex,
           keys: event.keys,
@@ -974,8 +976,15 @@ export class StarknetIndexer {
               const abiEvents = events.getAbiEvents(abi);
               const abiStructs = CallData.getAbiStruct(abi);
               const abiEnums = CallData.getAbiEnum(abi);
+              const parser = createAbiParser(abi);
 
-              const parsedEvents = events.parseEvents([eventObj], abiEvents, abiStructs, abiEnums);
+              const parsedEvents = events.parseEvents(
+                [eventObj],
+                abiEvents,
+                abiStructs,
+                abiEnums,
+                parser
+              );
 
               if (parsedEvents && parsedEvents.length > 0) {
                 // Get the first key of the parsed event (the event name)
@@ -986,6 +995,7 @@ export class StarknetIndexer {
                   block_number: eventObj.block_number,
                   block_hash: eventObj.block_hash,
                   transaction_hash: eventObj.transaction_hash,
+                  transaction_index: eventObj.transaction_index,
                   from_address: fromAddress,
                   event_index: eventObj.event_index,
                   keys: eventObj.keys,
@@ -995,7 +1005,7 @@ export class StarknetIndexer {
                 parsedEvent = parsedEventWithOriginal;
                 // this.logger.debug(`Parsed event values:`, parsedValues);
                 const eventName = eventKey;
-                this.progressStats.updateEvent(event.block_number, eventName, fromAddress);
+                this.progressStats.updateEvent(event.block_number ?? 0, eventName, fromAddress);
               }
             } catch (error) {
               this.logger.error(`Error parsing event from contract ${fromAddress}:`, error);
