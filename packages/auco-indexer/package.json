@@ -14,7 +14,7 @@
     "commander": "^11.1.0",
     "mysql2": "^3.14.1",
     "pg": "^8.11.0",
-    "starknet": "7.6.2",
+    "starknet": "9.3.0",
     "terminal-size": "^4.0.0"
   },
   "bin": {
