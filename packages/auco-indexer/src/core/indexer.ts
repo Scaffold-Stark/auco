@@ -64,7 +64,7 @@ export class StarknetIndexer {
   private haltReason: { blockNumber: number; error: any } | null = null;
   private failedBlocks: number[] = [];
   private retryTimeout?: NodeJS.Timeout;
-  private readonly RETRY_INTERVAL = 10000;
+  private readonly RETRY_INTERVAL: number;
   private readonly HEALTH_CHECK_INTERVAL = 3000; // 1 second between health checks
   private readonly reconnectDelay: number = 1000;
   private readonly MAX_HISTORICAL_BLOCK_CONCURRENT_REQUESTS: number;
@@ -101,6 +101,8 @@ export class StarknetIndexer {
     // Set concurrency for historical block fetching (default: 5, configurable)
     this.MAX_HISTORICAL_BLOCK_CONCURRENT_REQUESTS =
       config.maxHistoricalBlockConcurrentRequests ?? 5;
+
+    this.RETRY_INTERVAL = config.retryInterval ?? 10000;
 
     // Warn if dev mode reset is enabled
     if (config.devMode?.resetOnStart) {

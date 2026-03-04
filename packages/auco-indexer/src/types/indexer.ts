@@ -108,6 +108,13 @@ export interface IndexerConfig {
    */
   maxHistoricalBlockConcurrentRequests?: number;
 
+  /**
+   * Interval in milliseconds between retry attempts for failed blocks (default: 10000)
+   * When a block fails processing, the indexer halts and retries the failed block(s)
+   * on this interval until they succeed.
+   */
+  retryInterval?: number;
+
   /** Enable UI progress bar for tracking indexer progress */
   enableUiProgress?: boolean;
 
