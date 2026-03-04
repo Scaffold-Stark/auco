@@ -13,7 +13,6 @@ import {
 
 import {
   findContractDeploymentBlock,
-  groupConsecutiveBlocks,
   parallelMap,
 } from '../utils/blockUtils';
 import {
@@ -61,9 +60,11 @@ export class StarknetIndexer {
   private readonly dbHandler: BaseDbHandler;
   private healthCheckInterval?: NodeJS.Timeout;
 
+  private halted: boolean = false;
+  private haltReason: { blockNumber: number; error: any } | null = null;
   private failedBlocks: number[] = [];
   private retryTimeout?: NodeJS.Timeout;
-  private readonly RETRY_INTERVAL = 10000; // 10 seconds between retry checks
+  private readonly RETRY_INTERVAL: number;
   private readonly HEALTH_CHECK_INTERVAL = 3000; // 1 second between health checks
   private readonly reconnectDelay: number = 1000;
   private readonly MAX_HISTORICAL_BLOCK_CONCURRENT_REQUESTS: number;
@@ -100,6 +101,8 @@ export class StarknetIndexer {
     // Set concurrency for historical block fetching (default: 5, configurable)
     this.MAX_HISTORICAL_BLOCK_CONCURRENT_REQUESTS =
       config.maxHistoricalBlockConcurrentRequests ?? 5;
+
+    this.RETRY_INTERVAL = config.retryInterval ?? 10000;
 
     // Warn if dev mode reset is enabled
     if (config.devMode?.resetOnStart) {
@@ -168,6 +171,10 @@ export class StarknetIndexer {
       this.newHeadsSubscription.on(async (data) => {
         // Skip processing if indexer has been stopped
         if (!this.started) {
+          return;
+        }
+
+        if (this.isHalted()) {
           return;
         }
 
@@ -500,6 +507,10 @@ export class StarknetIndexer {
 
   // Process a new block head
   private async processNewHead(blockData: any): Promise<void> {
+    if (this.isHalted()) {
+      return;
+    }
+
     if (this.cursor && blockData.block_number <= this.cursor.blockNumber) {
       if (
         blockData.block_number === this.cursor.blockNumber &&
@@ -510,34 +521,31 @@ export class StarknetIndexer {
       }
     }
 
-    try {
-      await this.withTransaction(
-        'Processing block',
-        async () => {
-          await this.insertBlock(blockData);
-          await this.updateCursor(blockData.block_number, blockData.block_hash);
-          this.logger.info(`Successfully processed block #${blockData.block_number}`);
+    const result = await this.withTransaction(
+      'Processing block',
+      async () => {
+        await this.insertBlock(blockData);
+        await this.updateCursor(blockData.block_number, blockData.block_hash);
+        this.logger.info(`Successfully processed block #${blockData.block_number}`);
 
-          if (this.provider) {
-            await this.processBlockEvents(
-              blockData.block_number,
-              blockData.block_number,
-              blockData.block_hash
-            );
-          }
+        if (this.provider) {
+          await this.processBlockEvents(
+            blockData.block_number,
+            blockData.block_number,
+            blockData.block_hash
+          );
+        }
 
-          if (this.failedBlocks.length > 0 && this.failedBlocks.includes(blockData.block_number)) {
-            this.failedBlocks = this.failedBlocks.filter(
-              (block) => block !== blockData.block_number
-            );
-          }
-        },
-        { blockNumber: blockData.block_number }
+        return true; // signal success
+      },
+      { blockNumber: blockData.block_number }
+    );
+
+    if (result === undefined) {
+      this.halt(
+        blockData.block_number,
+        new Error(`Transaction failed for block #${blockData.block_number}`)
       );
-      // No need to call updateEvent for blocks unless you want to track them as events
-    } catch (error) {
-      this.logger.error(`Failed to process block #${blockData.block_number}:`, error);
-      this.addFailedBlock(blockData, error);
     }
   }
 
@@ -609,14 +617,15 @@ export class StarknetIndexer {
       clearTimeout(this.pollTimeout);
     }
 
-    if (this.healthCheckInterval) {
-      clearInterval(this.healthCheckInterval);
-    }
-
     if (this.retryTimeout) {
       clearTimeout(this.retryTimeout);
       this.retryTimeout = undefined;
     }
+
+    if (this.healthCheckInterval) {
+      clearInterval(this.healthCheckInterval);
+    }
+
     this.stopProgressUiLoop();
 
     // Unsubscribe from new heads subscription to stop event processing
@@ -701,6 +710,7 @@ export class StarknetIndexer {
   }
 
   private async processBlockQueue(): Promise<void> {
+    if (this.isHalted()) return;
     if (this.blockQueue.length === 0) return;
     const TAG = 'processBlockQueue';
     const blocksToProcess = [...this.blockQueue];
@@ -823,6 +833,11 @@ export class StarknetIndexer {
     this.progressStats.initSyncStats(fromBlock, toBlock);
 
     for (let blockNumber = fromBlock; blockNumber <= toBlock; blockNumber += chunkSize) {
+      if (this.isHalted()) {
+        this.logger.warn(`[${TAG}] Halted — aborting historical block sync`);
+        return;
+      }
+
       const chunkEndBlock = Math.min(blockNumber + chunkSize - 1, toBlock);
       const chunkLabel = `blocks_${blockNumber}_to_${chunkEndBlock}`;
 
@@ -872,37 +887,43 @@ export class StarknetIndexer {
       const fetchDuration = Date.now() - time;
       this.logger.debug(`[${TAG}] Fetched ${blocks.length} blocks in ${fetchDuration}ms`);
 
-      // Process all blocks and their events in a single transaction
-      await this.withTransaction(
-        `Processing blocks ${blockNumber} to ${chunkEndBlock} and their events`,
-        async () => {
-          const insertStart = Date.now();
+      if (blocks.length === 0) {
+        this.logger.info(
+          `[${TAG}] Skipping blocks ${blockNumber} to ${chunkEndBlock} - already processed`
+        );
+        continue;
+      }
 
-          // Batch insert all blocks
-          if (blocks.length > 0) {
-            await this.dbHandler.batchInsertBlocks(blocks);
+      // Sort blocks by number to ensure correct ordering for partial progress
+      blocks.sort((a, b) => a.block_number - b.block_number);
 
-            this.logger.debug(
-              `[${TAG}] Inserted ${blocks.length} blocks in ${Date.now() - insertStart}ms`
-            );
-            const eventsStart = Date.now();
-
-            if (blocks.length < chunkSize) {
-              const blockRanges = groupConsecutiveBlocks(blocks.map((block) => block.block_number));
-              for (const range of blockRanges) {
-                await this.processBlockEvents(range.from, range.to);
-              }
-            } else {
-              await this.processBlockEvents(blockNumber, chunkEndBlock);
-            }
-            this.logger.debug(`[${TAG}] Events processed in ${Date.now() - eventsStart}ms`);
-          } else {
-            this.logger.info(
-              `[${TAG}] Skipping blocks ${blockNumber} to ${chunkEndBlock} - already processed`
-            );
-          }
+      // Process each block individually in its own transaction for partial progress
+      for (const block of blocks) {
+        if (this.isHalted()) {
+          return;
         }
-      );
+
+        const result = await this.withTransaction(
+          `Processing block #${block.block_number}`,
+          async () => {
+            await this.insertBlock(block);
+            await this.processBlockEvents(block.block_number, block.block_number);
+            await this.updateCursor(block.block_number, block.block_hash);
+            return true;
+          },
+          { blockNumber: block.block_number }
+        );
+
+        if (result === undefined) {
+          this.halt(
+            block.block_number,
+            new Error(`Transaction failed for block #${block.block_number}`)
+          );
+          return;
+        }
+
+        this.logger.debug(`[${TAG}] Committed block #${block.block_number}`);
+      }
     }
   }
 
@@ -1082,62 +1103,92 @@ export class StarknetIndexer {
     return await this.dbHandler.checkIsBlockProcessed(blockNumber);
   }
 
-  private addFailedBlock(blockData: QueuedBlock, _error: any): void {
-    if (!this.failedBlocks.includes(blockData.block_number)) {
-      this.failedBlocks.push(blockData.block_number);
-      this.logger.warn(`Added block #${blockData.block_number} to failed blocks queue`);
+  private halt(blockNumber: number, error: any): void {
+    this.halted = true;
+    this.haltReason = { blockNumber, error };
+
+    if (!this.failedBlocks.includes(blockNumber)) {
+      this.failedBlocks.push(blockNumber);
     }
 
-    // Start retry process if it's not already running
+    this.logger.error(
+      `[HALTED] Indexer halted due to failure at block #${blockNumber}. ` +
+        `Error: ${error instanceof Error ? error.message : String(error)}. ` +
+        `Will retry automatically every ${this.RETRY_INTERVAL / 1000}s.`
+    );
+
     if (!this.retryTimeout) {
       this.startRetryProcess();
     }
   }
 
+  private resume(): void {
+    this.halted = false;
+    this.haltReason = null;
+    this.logger.info('[RESUMED] Indexer resumed after successful retry of all failed blocks.');
+  }
+
   private async retryFailedBlocks(): Promise<void> {
-    if (this.failedBlocks.length === 0) return;
-
-    const latestBlock = await this.provider!.getBlock('latest');
-    const blocksToRetry = this.failedBlocks.filter(
-      (blockNumber) => blockNumber < latestBlock.block_number
-    );
-
-    if (blocksToRetry.length === 0) return;
-
-    this.logger.info(`Attempting to retry ${blocksToRetry.length} failed blocks`);
+    const blocksToRetry = [...this.failedBlocks];
+    this.logger.info(`[RETRY] Attempting to retry ${blocksToRetry.length} failed block(s): ${blocksToRetry.join(', ')}`);
 
     for (const blockNumber of blocksToRetry) {
       try {
         await this.processHistoricalBlocks(blockNumber, blockNumber);
-        // Remove from failed blocks if successful
-        this.failedBlocks = this.failedBlocks.filter((b) => b !== blockNumber);
+
+        if (!this.halted) {
+          // Block succeeded — remove from failed list
+          this.failedBlocks = this.failedBlocks.filter((b) => b !== blockNumber);
+          this.logger.info(`[RETRY] Block #${blockNumber} succeeded on retry.`);
+        } else {
+          // processHistoricalBlocks re-halted on this block, stop retrying further
+          this.logger.warn(`[RETRY] Block #${blockNumber} still failing.`);
+          return;
+        }
       } catch (error) {
-        this.logger.error(`Retry failed for block #${blockNumber}:`, error);
+        this.logger.error(`[RETRY] Unexpected error retrying block #${blockNumber}:`, error);
+        return;
       }
+    }
+
+    if (this.failedBlocks.length === 0) {
+      this.resume();
     }
   }
 
   private startRetryProcess(): void {
-    const retryProcess = async () => {
-      if (!this.started) return;
+    this.retryTimeout = setTimeout(async () => {
+      this.retryTimeout = undefined;
 
-      try {
-        await this.retryFailedBlocks();
-      } catch (error) {
-        this.logger.error('Error in retry process:', error);
+      if (this.failedBlocks.length === 0) {
+        return;
       }
 
-      // Only schedule next retry if there are failed blocks
+      // Temporarily clear halt so processHistoricalBlocks can run
+      this.halted = false;
+      this.haltReason = null;
+
+      await this.retryFailedBlocks();
+
+      // If still have failed blocks, schedule next retry
       if (this.failedBlocks.length > 0) {
-        this.retryTimeout = setTimeout(retryProcess, this.RETRY_INTERVAL);
-      } else {
-        this.logger.debug('No failed blocks to retry, stopping retry process');
-        clearTimeout(this.retryTimeout);
-        this.retryTimeout = undefined;
+        this.startRetryProcess();
       }
-    };
+    }, this.RETRY_INTERVAL);
+  }
 
-    retryProcess();
+  private isHalted(): boolean {
+    if (this.halted) {
+      this.logger.warn(
+        `[HALTED] Indexer is halted (block #${this.haltReason?.blockNumber}). Ignoring request to process.`
+      );
+      return true;
+    }
+    return false;
+  }
+
+  public getHaltState(): { halted: boolean; reason: { blockNumber: number; error: any } | null } {
+    return { halted: this.halted, reason: this.haltReason };
   }
 
   private startProgressUiLoop() {

@@ -228,11 +228,6 @@ describe('StarknetIndexer', () => {
 
     afterEach(async () => {
       // Clear any timers that might be running
-      if ((mockIndexer as any).retryTimeout) {
-        clearTimeout((mockIndexer as any).retryTimeout);
-        (mockIndexer as any).retryTimeout = undefined;
-      }
-
       if ((mockIndexer as any).pollTimeout) {
         clearTimeout((mockIndexer as any).pollTimeout);
         (mockIndexer as any).pollTimeout = undefined;
@@ -804,7 +799,7 @@ describe('StarknetIndexer', () => {
     });
   });
 
-  describe('failed block retry mechanism', () => {
+  describe('halt and retry on block failure', () => {
     let mockIndexer: StarknetIndexer;
     let mockDbHandler: any;
     let mockProvider: any;
@@ -868,7 +863,10 @@ describe('StarknetIndexer', () => {
       jest.clearAllMocks();
     });
 
-    it('should add failed blocks to retry queue', () => {
+    it('should halt when a block fails processing', async () => {
+      // Make insertBlock throw to simulate a block processing failure
+      mockDbHandler.insertBlock.mockRejectedValueOnce(new Error('DB write failed'));
+
       const blockData = {
         block_number: 50,
         block_hash: '0xblock50',
@@ -876,38 +874,164 @@ describe('StarknetIndexer', () => {
         timestamp: Date.now(),
       };
 
-      (mockIndexer as any).addFailedBlock(blockData, new Error('Processing failed'));
+      await (mockIndexer as any).processNewHead(blockData);
 
-      const failedBlocks = (mockIndexer as any).failedBlocks;
-      expect(failedBlocks).toContain(50);
+      expect((mockIndexer as any).halted).toBe(true);
+      expect((mockIndexer as any).haltReason).toEqual({
+        blockNumber: 50,
+        error: expect.any(Error),
+      });
     });
 
-    it('should not duplicate failed blocks', () => {
+    it('should not process new blocks after halt', async () => {
+      // Manually halt the indexer
+      (mockIndexer as any).halt(42, new Error('test halt'));
+
       const blockData = {
+        block_number: 43,
+        block_hash: '0xblock43',
+        parent_hash: '0xblock42',
+        timestamp: Date.now(),
+      };
+
+      await (mockIndexer as any).processNewHead(blockData);
+
+      // insertBlock should never be called because the indexer is halted
+      expect(mockDbHandler.insertBlock).not.toHaveBeenCalled();
+    });
+
+    it('should stop historical block processing when halted', async () => {
+      // Halt after the first chunk starts
+      mockDbHandler.checkIsBlockProcessed.mockImplementation(async (blockNumber: number) => {
+        if (blockNumber >= 1) {
+          (mockIndexer as any).halt(1, new Error('test halt'));
+        }
+        return false;
+      });
+
+      await (mockIndexer as any).processHistoricalBlocks(1, 200);
+
+      // Should not have processed the second chunk (blocks 101-200)
+      // because the indexer halted during or after the first chunk
+      expect((mockIndexer as any).halted).toBe(true);
+    });
+
+    it('should expose halt state via getHaltState()', () => {
+      // Initially not halted
+      const initialState = mockIndexer.getHaltState();
+      expect(initialState).toEqual({ halted: false, reason: null });
+
+      // After halting
+      (mockIndexer as any).halt(99, new Error('fatal error'));
+
+      const haltedState = mockIndexer.getHaltState();
+      expect(haltedState.halted).toBe(true);
+      expect(haltedState.reason).toEqual({
+        blockNumber: 99,
+        error: expect.any(Error),
+      });
+    });
+
+    it('should add failed block to retry queue when halting', () => {
+      (mockIndexer as any).halt(42, new Error('test halt'));
+
+      expect((mockIndexer as any).failedBlocks).toContain(42);
+      expect((mockIndexer as any).retryTimeout).toBeDefined();
+    });
+
+    it('should not duplicate failed blocks in retry queue', () => {
+      (mockIndexer as any).halt(42, new Error('test halt 1'));
+      (mockIndexer as any).halt(42, new Error('test halt 2'));
+
+      const failedBlocks = (mockIndexer as any).failedBlocks;
+      expect(failedBlocks.filter((b: number) => b === 42)).toHaveLength(1);
+    });
+
+    it('should resume after successful retry', async () => {
+      // Halt the indexer
+      (mockIndexer as any).halt(50, new Error('temporary failure'));
+      expect((mockIndexer as any).halted).toBe(true);
+
+      // Mock getBlock to return a valid block for the retry
+      mockProvider.getBlock.mockResolvedValue({
         block_number: 50,
         block_hash: '0xblock50',
         parent_hash: '0xblock49',
         timestamp: Date.now(),
-      };
+      });
 
-      (mockIndexer as any).addFailedBlock(blockData, new Error('Processing failed'));
-      (mockIndexer as any).addFailedBlock(blockData, new Error('Processing failed again'));
+      // Mock withExponentialBackoff to just run the function
+      (mockIndexer as any).withExponentialBackoff = jest
+        .fn()
+        .mockImplementation(async (_op: string, fn: () => Promise<any>) => {
+          return await fn();
+        });
 
-      const failedBlocks = (mockIndexer as any).failedBlocks;
-      expect(failedBlocks.filter((block: number) => block === 50)).toHaveLength(1);
-    });
-
-    it('should retry failed blocks successfully', async () => {
-      (mockIndexer as any).failedBlocks = [45, 46];
-
-      // Mock processHistoricalBlocks to avoid complex dependencies
-      (mockIndexer as any).processHistoricalBlocks = jest.fn().mockResolvedValue(undefined);
+      // Clear halt state to allow retry to run (simulating what startRetryProcess does)
+      (mockIndexer as any).halted = false;
+      (mockIndexer as any).haltReason = null;
 
       await (mockIndexer as any).retryFailedBlocks();
 
-      expect((mockIndexer as any).processHistoricalBlocks).toHaveBeenCalledWith(45, 45);
-      expect((mockIndexer as any).processHistoricalBlocks).toHaveBeenCalledWith(46, 46);
+      expect((mockIndexer as any).halted).toBe(false);
+      expect((mockIndexer as any).haltReason).toBeNull();
       expect((mockIndexer as any).failedBlocks).toHaveLength(0);
+    });
+
+    it('should commit partial progress — blocks before failure are committed', async () => {
+      // Setup: blocks 1-5, block 3 fails
+      const blocks = [1, 2, 3, 4, 5];
+
+      mockDbHandler.checkIsBlockProcessed.mockResolvedValue(false);
+
+      mockProvider.getBlock.mockImplementation(async (blockNumber: number) => ({
+        block_number: blockNumber,
+        block_hash: `0xblock${blockNumber}`,
+        parent_hash: `0xblock${blockNumber - 1}`,
+        timestamp: Date.now(),
+      }));
+
+      // Make the transaction fail for block 3
+      let insertCallCount = 0;
+      mockDbHandler.withTransaction.mockImplementation(async (fn: () => Promise<any>) => {
+        insertCallCount++;
+        if (insertCallCount === 3) {
+          // Block 3's transaction fails
+          throw new Error('DB write failed for block 3');
+        }
+        return await fn();
+      });
+
+      // Mock withExponentialBackoff to just run the function
+      (mockIndexer as any).withExponentialBackoff = jest
+        .fn()
+        .mockImplementation(async (_op: string, fn: () => Promise<any>) => {
+          return await fn();
+        });
+
+      await (mockIndexer as any).processHistoricalBlocks(1, 5);
+
+      // Blocks 1 and 2 should have been inserted (their transactions succeeded)
+      expect(mockDbHandler.insertBlock).toHaveBeenCalledTimes(2);
+      expect(mockDbHandler.insertBlock).toHaveBeenCalledWith(
+        expect.objectContaining({ block_number: 1 })
+      );
+      expect(mockDbHandler.insertBlock).toHaveBeenCalledWith(
+        expect.objectContaining({ block_number: 2 })
+      );
+
+      // Cursor should have been updated for blocks 1 and 2
+      expect(mockDbHandler.updateCursor).toHaveBeenCalledWith(1, '0xblock1', undefined);
+      expect(mockDbHandler.updateCursor).toHaveBeenCalledWith(2, '0xblock2', undefined);
+
+      // Block 3 should NOT have been inserted (its transaction failed)
+      expect(mockDbHandler.insertBlock).not.toHaveBeenCalledWith(
+        expect.objectContaining({ block_number: 3 })
+      );
+
+      // Indexer should be halted at block 3
+      expect((mockIndexer as any).halted).toBe(true);
+      expect((mockIndexer as any).haltReason?.blockNumber).toBe(3);
     });
   });
 
